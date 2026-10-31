@@ -17,6 +17,7 @@ pdfjs.GlobalWorkerOptions.workerSrc = workerUrl;
 type Api = ReturnType<typeof createApi>;
 type DocInfo = { path: string; dirty: boolean; snippet: string; has_preview: boolean };
 type TemplateInfo = { path: string; builtin: boolean };
+type FolderInfo = { path: string };
 
 const $ = <T extends HTMLElement>(id: string) => document.getElementById(id) as T;
 const status = (s: string) => ($("status").textContent = s);
@@ -25,6 +26,8 @@ const status = (s: string) => ($("status").textContent = s);
 let api: Api;
 let user = "";
 let docPath = ""; // path of the open document, e.g. "Physics/Week 3/HW 1"
+/** Set while a template (not a document) is loaded in the editor; docPath keeps the last open document. */
+let templateName: string | null = null;
 
 // ---- editor ----
 let view: EditorView | undefined;
@@ -37,8 +40,8 @@ function vimPref(): boolean {
 
 const source = () => view!.state.doc.toString();
 
-// The document a pending edit belongs to; captured at edit time so switching documents can't misfile a save.
-let pendingDoc: string | null = null;
+// What a pending edit belongs to; captured at edit time so switching documents can't misfile a save.
+let pendingDoc: { template: boolean; path: string } | null = null;
 let saveTimer: number | undefined;
 
 async function flushSave() {
@@ -46,7 +49,8 @@ async function flushSave() {
   if (pendingDoc === null) return;
   const p = pendingDoc;
   pendingDoc = null;
-  await invoke("save_source", { user, path: p, source: source() });
+  if (p.template) await invoke("save_template", { user, name: p.path, source: source(), overwrite: true });
+  else await invoke("save_source", { user, path: p, source: source() });
   syncSoon();
 }
 
@@ -66,7 +70,7 @@ function createEditor(doc: string) {
       keymap.of([indentWithTab]),
       EditorView.updateListener.of((u) => {
         if (!u.docChanged || loadingDoc) return;
-        pendingDoc = docPath;
+        pendingDoc = templateName !== null ? { template: true, path: templateName } : { template: false, path: docPath };
         clearTimeout(saveTimer);
         saveTimer = window.setTimeout(() => void flushSave(), 800);
       }),
@@ -109,10 +113,10 @@ async function compile() {
   status("Compiling…");
   const log = $("log");
   try {
-    const bytes = new Uint8Array(await invoke<ArrayBuffer>("compile", { user, path: docPath, source: source() }));
+    const bytes = new Uint8Array(await invoke<ArrayBuffer>("compile", { user, path: templateName ?? docPath, source: source(), scratch: templateName !== null }));
     log.hidden = true;
     const thumb = await renderPdf(bytes);
-    if (thumb) void savePreview(docPath, thumb);
+    if (thumb && templateName === null) void savePreview(docPath, thumb);
     status("Compiled");
   } catch (e) {
     log.hidden = false;
@@ -149,10 +153,25 @@ async function savePreview(path: string, page: HTMLCanvasElement) {
   if (!blob) return;
   await invoke("save_preview", new Uint8Array(await blob.arrayBuffer()), {
     headers: { "x-user": user, "x-path": encodeURIComponent(path) },
-  }).catch(() => {});
+  }).then(syncSoon, () => {});
 }
 
 $("compile").addEventListener("click", compile);
+
+// ---- menu ----
+const menuList = $("menu-list");
+const setMenu = (open: boolean) => {
+  menuList.hidden = !open;
+  $("menu-button").setAttribute("aria-expanded", String(open));
+};
+$("menu-button").addEventListener("click", (e) => { e.stopPropagation(); setMenu(menuList.hasAttribute("hidden")); });
+// Any item (or a click elsewhere, or Escape) closes the menu.
+menuList.addEventListener("click", () => setMenu(false));
+document.addEventListener("click", () => setMenu(false));
+document.addEventListener("keydown", (e) => { if (e.key === "Escape") setMenu(false); });
+document.querySelectorAll<HTMLButtonElement>("#menu-list .stub").forEach((b) =>
+  b.addEventListener("click", () => status(`${b.dataset.stub}: not implemented yet`)),
+);
 
 // ---- documents, folders, templates ----
 const lastKey = () => `hwscan:last:${user}`;
@@ -162,6 +181,7 @@ const baseOf = (path: string) => path.slice(path.lastIndexOf("/") + 1);
 async function openDocument(path: string) {
   await flushSave();
   docPath = path;
+  templateName = null;
   try { localStorage.setItem(lastKey(), path); } catch {}
   const text = await invoke<string>("load_source", { user, path });
   if (view) setDoc(text);
@@ -173,11 +193,62 @@ async function openDocument(path: string) {
   syncSoon();
 }
 
+async function openTemplate(name: string) {
+  await flushSave();
+  templateName = name;
+  const text = await invoke<string>("read_template", { user, name });
+  if (view) setDoc(text);
+  else createEditor(text);
+  $("pages").replaceChildren();
+  $("log").hidden = true;
+  $("doc-name").textContent = `Template: ${name}`;
+}
+
+// Cancel is type="button" so that pressing Enter in a field submits via the OK button, not Cancel.
+document.querySelectorAll<HTMLButtonElement>("dialog .cancel").forEach((b) => {
+  b.addEventListener("click", () => b.closest("dialog")!.close());
+});
+
 function dialogOpen(dlg: HTMLDialogElement, input: HTMLInputElement) {
   input.value = "";
   dlg.showModal();
   input.focus();
 }
+
+// -- ⋮ menus --
+type MenuItem = { label: string; run: () => void; danger?: boolean; disabled?: boolean };
+
+/** A vertical-dots button that opens a small menu. The menu lives in `host` (a dialog) so it shows above it. */
+function kebab(host: HTMLElement, items: MenuItem[]) {
+  const btn = document.createElement("button");
+  btn.className = "kebab";
+  btn.textContent = "⋮";
+  btn.title = "Actions";
+  btn.setAttribute("aria-haspopup", "menu");
+  btn.onclick = (e) => {
+    e.stopPropagation();
+    const existing = host.querySelector(".popup");
+    existing?.remove();
+    const pop = document.createElement("div");
+    pop.className = "popup";
+    pop.setAttribute("role", "menu");
+    for (const it of items) {
+      const b = document.createElement("button");
+      b.textContent = it.label;
+      b.disabled = !!it.disabled;
+      if (it.danger) b.className = "danger";
+      b.onclick = (ev) => { ev.stopPropagation(); pop.remove(); it.run(); };
+      pop.append(b);
+    }
+    const r = btn.getBoundingClientRect();
+    pop.style.top = `${r.bottom + 2}px`;
+    pop.style.left = `${Math.max(8, r.right - 170)}px`;
+    host.append(pop);
+  };
+  return btn;
+}
+// Clicking anywhere else closes an open ⋮ menu.
+document.addEventListener("click", () => document.querySelectorAll(".popup").forEach((p) => p.remove()));
 
 // -- document picker --
 let pickerFolder = ""; // "" is the top level
@@ -186,10 +257,11 @@ let previewUrls: string[] = [];
 async function renderPicker() {
   previewUrls.forEach((u) => URL.revokeObjectURL(u));
   previewUrls = [];
-  const [docs, folders] = await Promise.all([
+  const [docs, folderInfos] = await Promise.all([
     invoke<DocInfo[]>("list_documents", { user }),
-    invoke<string[]>("list_folders", { user }),
+    invoke<FolderInfo[]>("list_folders", { user }),
   ]);
+  const folders = folderInfos.map((f) => f.path);
 
   // Breadcrumb: Documents / Physics / Week 3
   const crumbs = $("crumbs");
@@ -207,18 +279,44 @@ async function renderPicker() {
   );
 
   const cards: HTMLElement[] = [];
+
+  // A card is a div (not a button) because it contains the action buttons.
+  const makeCard = (cls: string, path: string, kind: "document" | "folder", onOpen: () => void) => {
+    const card = document.createElement("div");
+    card.className = `card ${cls}`;
+    card.tabIndex = 0;
+    card.onclick = onOpen;
+    card.onkeydown = (e) => { if (e.key === "Enter") onOpen(); };
+    const items: MenuItem[] = [
+      { label: "Rename…", run: () => askRename(path) },
+      { label: "Move…", run: () => void askMove(path, kind) },
+      ...(kind === "document" ? [{ label: "Save as template…", run: () => askSaveTemplate(path) }] : []),
+      { label: "Delete", danger: true, run: () => askDelete(path, kind) },
+    ];
+    card.append(kebab($("picker"), items));
+    return card;
+  };
+
   for (const f of folders.filter((f) => parentOf(f) === pickerFolder)) {
     const count = docs.filter((d) => d.path.startsWith(f + "/")).length;
-    const card = document.createElement("button");
-    card.className = "card folder";
-    card.innerHTML = `<div class="thumb">📁</div><div class="title"></div><div class="meta">${count} document${count === 1 ? "" : "s"}</div>`;
-    card.querySelector(".title")!.textContent = baseOf(f);
-    card.onclick = () => { pickerFolder = f; void renderPicker(); };
+    const card = makeCard("folder", f, "folder", () => { pickerFolder = f; void renderPicker(); });
+    const thumb = document.createElement("div");
+    thumb.className = "thumb";
+    thumb.textContent = "📁";
+    const title = document.createElement("div");
+    title.className = "title";
+    title.textContent = baseOf(f);
+    const meta = document.createElement("div");
+    meta.className = "meta";
+    meta.textContent = `${count} document${count === 1 ? "" : "s"}`;
+    card.append(thumb, title, meta);
     cards.push(card);
   }
   for (const d of docs.filter((d) => parentOf(d.path) === pickerFolder)) {
-    const card = document.createElement("button");
-    card.className = "card doc" + (d.path === docPath ? " current" : "");
+    const card = makeCard("doc" + (d.path === docPath ? " current" : ""), d.path, "document", async () => {
+      $<HTMLDialogElement>("picker").close();
+      await openDocument(d.path);
+    });
     const thumb = document.createElement("div");
     thumb.className = "thumb";
     if (d.has_preview) {
@@ -231,9 +329,8 @@ async function renderPicker() {
           thumb.replaceChildren(img);
         })
         .catch(() => {});
-    }
-    if (!d.has_preview) {
-      // Never compiled on this device: show the start of the source instead.
+    } else {
+      // Never compiled anywhere yet: show the start of the source instead.
       const pre = document.createElement("pre");
       pre.textContent = d.snippet || "(empty)";
       thumb.append(pre);
@@ -245,10 +342,6 @@ async function renderPicker() {
     meta.className = "meta";
     meta.textContent = d.dirty ? "Not synced yet" : "";
     card.append(thumb, title, meta);
-    card.onclick = async () => {
-      $<HTMLDialogElement>("picker").close();
-      await openDocument(d.path);
-    };
     cards.push(card);
   }
   $("doc-grid").replaceChildren(...cards);
@@ -262,6 +355,129 @@ $("doc-button").addEventListener("click", async () => {
   $<HTMLDialogElement>("picker").showModal();
 });
 $("picker-close").addEventListener("click", () => $<HTMLDialogElement>("picker").close());
+
+// -- rename / move / delete --
+const remap = (path: string, from: string, to: string) =>
+  path === from ? to : path.startsWith(from + "/") ? to + path.slice(from.length) : path;
+
+/** After moving `from` to `to`, keep the editor pointed at the same document. */
+function followMove(from: string, to: string) {
+  const next = remap(docPath, from, to);
+  if (next === docPath) return;
+  docPath = next;
+  $("doc-name").textContent = next;
+  try { localStorage.setItem(lastKey(), next); } catch {}
+}
+
+async function doMove(from: string, to: string) {
+  await flushSave(); // pending edits belong to the old path
+  await invoke("move_item", { user, from, to });
+  followMove(from, to);
+  syncSoon();
+}
+
+let renameFrom = "";
+function askRename(path: string) {
+  renameFrom = path;
+  $("rename-error").textContent = "";
+  dialogOpen($<HTMLDialogElement>("rename-dialog"), $<HTMLInputElement>("rename-name"));
+  $<HTMLInputElement>("rename-name").value = baseOf(path);
+  $<HTMLInputElement>("rename-name").select();
+}
+
+$("rename-form").addEventListener("submit", async (e) => {
+  const submitter = (e as SubmitEvent).submitter as HTMLButtonElement | null;
+  if (submitter?.value !== "ok") return;
+  const parent = parentOf(renameFrom);
+  const name = $<HTMLInputElement>("rename-name").value.trim();
+  const to = parent ? `${parent}/${name}` : name;
+  if (to === renameFrom) return;
+  try {
+    await doMove(renameFrom, to);
+  } catch (err) {
+    e.preventDefault();
+    $("rename-error").textContent = String(err);
+    return;
+  }
+  void renderPicker();
+});
+
+let moveFrom = "";
+async function askMove(path: string, kind: "document" | "folder") {
+  moveFrom = path;
+  const folders = (await invoke<FolderInfo[]>("list_folders", { user })).map((f) => f.path);
+  // A folder can't be moved into itself or anything inside it.
+  const targets = folders.filter((f) => kind === "document" || (f !== path && !f.startsWith(path + "/")));
+  const sel = $<HTMLSelectElement>("move-target");
+  sel.replaceChildren(new Option("Documents (top level)", ""), ...targets.map((f) => new Option(f, f)));
+  sel.value = parentOf(path);
+  $("move-what").textContent = `Move "${baseOf(path)}" to:`;
+  $("move-error").textContent = "";
+  $<HTMLDialogElement>("move-dialog").showModal();
+}
+
+$("move-form").addEventListener("submit", async (e) => {
+  const submitter = (e as SubmitEvent).submitter as HTMLButtonElement | null;
+  if (submitter?.value !== "ok") return;
+  const dest = $<HTMLSelectElement>("move-target").value;
+  const to = dest ? `${dest}/${baseOf(moveFrom)}` : baseOf(moveFrom);
+  if (to === moveFrom) return;
+  try {
+    await doMove(moveFrom, to);
+  } catch (err) {
+    e.preventDefault();
+    $("move-error").textContent = String(err);
+    return;
+  }
+  void renderPicker();
+});
+
+let deletePath = "";
+let deleteKind: "document" | "folder" | "template" = "document";
+function askDelete(path: string, kind: "document" | "folder" | "template") {
+  deletePath = path;
+  deleteKind = kind;
+  $("delete-what").textContent =
+    kind === "template"
+      ? `Delete the template "${path}"? This also deletes it on your other devices and cannot be undone.`
+      : kind === "folder"
+      ? `Delete the folder "${baseOf(path)}" and everything in it? This also deletes it on your other devices and cannot be undone.`
+      : `Delete "${baseOf(path)}"? This also deletes it on your other devices and cannot be undone.`;
+  $("delete-error").textContent = "";
+  $<HTMLDialogElement>("delete-dialog").showModal();
+}
+
+$("delete-form").addEventListener("submit", async (e) => {
+  const submitter = (e as SubmitEvent).submitter as HTMLButtonElement | null;
+  if (submitter?.value !== "ok") return;
+  try {
+    await flushSave();
+    if (deleteKind === "template") await invoke("delete_template", { user, name: deletePath });
+    else await invoke("delete_item", { user, path: deletePath });
+  } catch (err) {
+    e.preventDefault();
+    $("delete-error").textContent = String(err);
+    return;
+  }
+  if (deleteKind === "template") {
+    if (templateName === deletePath) await openAnyDocument();
+    void renderTemplates();
+  } else {
+    if (templateName === null && remap(docPath, deletePath, "\0") !== docPath) await openAnyDocument();
+    void renderPicker();
+  }
+  syncSoon();
+});
+
+/** Opens some document, creating one if the account has none (e.g. after deleting the open one). */
+async function openAnyDocument() {
+  let docs = await invoke<DocInfo[]>("list_documents", { user });
+  if (!docs.length) {
+    await invoke("create_document", { user, path: "Untitled", template: "Homework" });
+    docs = await invoke<DocInfo[]>("list_documents", { user });
+  }
+  await openDocument(docs[0].path);
+}
 
 // -- new folder --
 $("new-folder").addEventListener("click", () => {
@@ -310,21 +526,30 @@ $("new-form").addEventListener("submit", async (e) => {
   await openDocument(path);
 });
 
-// -- save current document as a template --
+// -- save a document as a template (from its ⋮ menu) --
 let tplOverwrite = false;
-$("save-template").addEventListener("click", () => {
+let tplFrom = "";
+function askSaveTemplate(path: string) {
   tplOverwrite = false;
+  tplFrom = path;
   $("tpl-error").textContent = "";
   $("tpl-ok").textContent = "Save";
-  dialogOpen($<HTMLDialogElement>("tpl-dialog"), $<HTMLInputElement>("tpl-name"));
-});
+  const input = $<HTMLInputElement>("tpl-name");
+  dialogOpen($<HTMLDialogElement>("tpl-dialog"), input);
+  input.value = baseOf(path);
+  input.select();
+}
 
 $("tpl-form").addEventListener("submit", async (e) => {
   const submitter = (e as SubmitEvent).submitter as HTMLButtonElement | null;
   if (submitter?.value !== "ok") return;
   try {
+    await flushSave(); // so the template reflects what's on screen if this is the open document
     await invoke("save_template", {
-      user, name: $<HTMLInputElement>("tpl-name").value.trim(), source: source(), overwrite: tplOverwrite,
+      user,
+      name: $<HTMLInputElement>("tpl-name").value.trim(),
+      source: await invoke<string>("load_source", { user, path: tplFrom }),
+      overwrite: tplOverwrite,
     });
   } catch (err) {
     e.preventDefault();
@@ -339,6 +564,48 @@ $("tpl-form").addEventListener("submit", async (e) => {
   }
   syncSoon();
 });
+
+// -- template manager (from the main menu): open to edit, or delete --
+async function renderTemplates() {
+  const templates = await invoke<(TemplateInfo & { snippet: string; dirty: boolean })[]>("list_templates", { user });
+  const cards = templates.map((t) => {
+    const card = document.createElement("div");
+    card.className = "card doc" + (templateName === t.path ? " current" : "");
+    card.tabIndex = 0;
+    const open = async () => {
+      $<HTMLDialogElement>("tpl-manager").close();
+      await openTemplate(t.path);
+    };
+    card.onclick = open;
+    card.onkeydown = (e) => { if (e.key === "Enter") void open(); };
+    const thumb = document.createElement("div");
+    thumb.className = "thumb";
+    const pre = document.createElement("pre");
+    pre.textContent = t.snippet || "(empty)";
+    thumb.append(pre);
+    const title = document.createElement("div");
+    title.className = "title";
+    title.textContent = t.path;
+    const meta = document.createElement("div");
+    meta.className = "meta";
+    meta.textContent = t.builtin ? "Built-in" : t.dirty ? "Not synced yet" : "";
+    card.append(
+      thumb, title, meta,
+      kebab($("tpl-manager"), [
+        { label: "Delete", danger: true, disabled: t.builtin, run: () => askDelete(t.path, "template") },
+      ]),
+    );
+    return card;
+  });
+  $("tpl-grid").replaceChildren(...cards);
+}
+
+$("manage-templates").addEventListener("click", async () => {
+  await flushSave();
+  await renderTemplates();
+  $<HTMLDialogElement>("tpl-manager").showModal();
+});
+$("tpl-manager-close").addEventListener("click", () => $<HTMLDialogElement>("tpl-manager").close());
 
 // ---- sync ----
 let syncTimer: number | undefined;
@@ -357,9 +624,18 @@ async function doSync() {
     const res = await runSync(api, user, docPath || null);
     if (res === null) return;
     // Reload the open document if the server copy replaced it. flushSave() above means no edits were lost.
-    if (res.pulled.includes(docPath)) setDoc(await invoke<string>("load_source", { user, path: docPath }));
+    if (templateName === null && res.pulled.includes(docPath)) setDoc(await invoke<string>("load_source", { user, path: docPath }));
+    // The open document was deleted on another device (and had no local edits to keep it alive).
+    if (templateName === null && docPath && res.removed.some((p) => remap(docPath, p, "\0") !== docPath)) await openAnyDocument();
     if ($<HTMLDialogElement>("picker").open) void renderPicker();
-    setSync("Synced");
+    if (res.errors.length) {
+      console.warn("sync errors", res.errors);
+      setSync(`Synced with ${res.errors.length} error${res.errors.length === 1 ? "" : "s"}`);
+      $("sync").title = res.errors.join("\n");
+    } else {
+      setSync("Synced");
+      $("sync").title = "";
+    }
     if (res.conflicts.length) status(`Conflict: server version kept as "${res.conflicts.join('", "')}"`);
   } catch (e) {
     console.warn("sync failed", e);
@@ -401,7 +677,11 @@ async function photoCard(p: Photo) {
     return b;
   };
 
+  const needDoc = () => {
+    if (templateName !== null) throw new Error("Open a document to insert photos");
+  };
   const saveImage = async () => {
+    needDoc();
     const ext = p.storage_path.split(".").pop() ?? "jpg";
     return invoke<string>("save_image", new Uint8Array(await blob.arrayBuffer()), {
       headers: { "x-user": user, "x-path": encodeURIComponent(docPath), "x-name": `${p.id}.${ext}` },
@@ -416,6 +696,7 @@ async function photoCard(p: Photo) {
       await refreshInbox();
     }),
     mk("OCR → LaTeX", async () => {
+      needDoc();
       status("Running OCR…");
       const latex = await api.ocr(p.id);
       // Inserted as visible text for review; user edits before compiling.
@@ -439,14 +720,12 @@ async function start(userId: string) {
   // Pull first on a fresh device so we don't invent a document that the server already has.
   await doSync();
 
-  let docs = await invoke<DocInfo[]>("list_documents", { user });
-  if (!docs.length) {
-    await invoke("create_document", { user, path: "Untitled", template: "Homework" });
-    docs = await invoke<DocInfo[]>("list_documents", { user });
-  }
+  const docs = await invoke<DocInfo[]>("list_documents", { user });
   let last: string | null = null;
   try { last = localStorage.getItem(lastKey()); } catch {}
-  await openDocument(docs.find((d) => d.path === last)?.path ?? docs[0].path);
+  const remembered = docs.find((d) => d.path === last)?.path;
+  if (remembered) await openDocument(remembered);
+  else await openAnyDocument();
 
   api.onNewPhoto(() => void refreshInbox());
 }

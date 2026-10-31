@@ -32,9 +32,22 @@ const BUILTIN_TEMPLATES: [(&str, &str); 2] =
 /// Per-document sync state, stored beside the document.
 /// `remote_at` is the server `updated_at` this copy was last in step with.
 #[derive(Serialize, Deserialize, Default, Clone)]
+#[serde(default)]
 struct Meta {
     dirty: bool,
     remote_at: Option<String>,
+    /// Marker of the server preview this local preview.png matches.
+    preview_at: Option<String>,
+    /// preview.png was rendered here and not uploaded yet.
+    preview_dirty: bool,
+}
+
+/// A deletion not yet applied on the server. `remote_at` is the version that was deleted.
+#[derive(Serialize, Deserialize, Clone)]
+struct Tombstone {
+    kind: String,
+    path: String,
+    remote_at: String,
 }
 
 #[derive(Serialize)]
@@ -45,6 +58,15 @@ struct DocInfo {
     /// Start of the document body, shown when there is no rendered preview.
     snippet: String,
     has_preview: bool,
+    preview_at: Option<String>,
+    preview_dirty: bool,
+}
+
+#[derive(Serialize)]
+struct FolderInfo {
+    path: String,
+    dirty: bool,
+    remote_at: Option<String>,
 }
 
 #[derive(Serialize)]
@@ -53,6 +75,7 @@ struct TemplateInfo {
     dirty: bool,
     remote_at: Option<String>,
     builtin: bool,
+    snippet: String,
 }
 
 /// Names become folder/file names, so only allow a plain, visible name.
@@ -140,6 +163,46 @@ fn write_meta(path: &PathBuf, meta: &Meta) -> Result<(), String> {
         .map_err(|e| e.to_string())
 }
 
+fn update_meta(path: &PathBuf, f: impl FnOnce(&mut Meta)) -> Result<(), String> {
+    let mut meta = read_meta(path);
+    f(&mut meta);
+    write_meta(path, &meta)
+}
+
+fn tombstone_file(app: &tauri::AppHandle, user: &str) -> Result<PathBuf, String> {
+    Ok(user_dir(app, user)?.join(".deleted.json"))
+}
+
+fn read_tombstones(app: &tauri::AppHandle, user: &str) -> Result<Vec<Tombstone>, String> {
+    Ok(fs::read_to_string(tombstone_file(app, user)?)
+        .ok()
+        .and_then(|s| serde_json::from_str(&s).ok())
+        .unwrap_or_default())
+}
+
+fn write_tombstones(app: &tauri::AppHandle, user: &str, t: &[Tombstone]) -> Result<(), String> {
+    fs::write(tombstone_file(app, user)?, serde_json::to_string(t).map_err(|e| e.to_string())?)
+        .map_err(|e| e.to_string())
+}
+
+/// Every item at or under `dir`: (kind, path, meta). Documents are leaves.
+fn collect_items(dir: &std::path::Path, path: &str) -> Vec<(&'static str, String, Meta)> {
+    let meta = read_meta(&dir.join(".sync.json"));
+    if is_document(dir) {
+        return vec![("document", path.to_string(), meta)];
+    }
+    let mut out = vec![("folder", path.to_string(), meta)];
+    if let Ok(entries) = fs::read_dir(dir) {
+        for e in entries.flatten() {
+            let name = e.file_name().to_string_lossy().to_string();
+            if !name.starts_with('.') && e.path().is_dir() {
+                out.extend(collect_items(&e.path(), &format!("{path}/{name}")));
+            }
+        }
+    }
+    out
+}
+
 fn template_paths(
     app: &tauri::AppHandle,
     user: &str,
@@ -160,7 +223,7 @@ fn snippet(source: &str) -> String {
 }
 
 /// Walks the account folder. Documents are not descended into.
-fn walk(dir: &std::path::Path, prefix: &str, docs: &mut Vec<DocInfo>, folders: &mut Vec<String>) {
+fn walk(dir: &std::path::Path, prefix: &str, docs: &mut Vec<DocInfo>, folders: &mut Vec<FolderInfo>) {
     let Ok(entries) = fs::read_dir(dir) else { return };
     for entry in entries.flatten() {
         let name = entry.file_name().to_string_lossy().to_string();
@@ -177,9 +240,12 @@ fn walk(dir: &std::path::Path, prefix: &str, docs: &mut Vec<DocInfo>, folders: &
                 path,
                 dirty: meta.dirty,
                 remote_at: meta.remote_at,
+                preview_at: meta.preview_at,
+                preview_dirty: meta.preview_dirty,
             });
         } else {
-            folders.push(path.clone());
+            let meta = read_meta(&p.join(".sync.json"));
+            folders.push(FolderInfo { path: path.clone(), dirty: meta.dirty, remote_at: meta.remote_at });
             walk(&p, &path, docs, folders);
         }
     }
@@ -194,10 +260,10 @@ fn list_documents(app: tauri::AppHandle, user: String) -> Result<Vec<DocInfo>, S
 }
 
 #[tauri::command]
-fn list_folders(app: tauri::AppHandle, user: String) -> Result<Vec<String>, String> {
+fn list_folders(app: tauri::AppHandle, user: String) -> Result<Vec<FolderInfo>, String> {
     let (mut docs, mut folders) = (vec![], vec![]);
     walk(&user_dir(&app, &user)?, "", &mut docs, &mut folders);
-    folders.sort_by_key(|f| f.to_lowercase());
+    folders.sort_by_key(|f| f.path.to_lowercase());
     Ok(folders)
 }
 
@@ -221,12 +287,19 @@ fn list_templates(app: tauri::AppHandle, user: String) -> Result<Vec<TemplateInf
             let file = e.file_name().to_string_lossy().to_string();
             let path = file.strip_suffix(".tex")?.to_string();
             let meta = read_meta(&e.path().with_extension("sync.json"));
-            Some(TemplateInfo { path, dirty: meta.dirty, remote_at: meta.remote_at, builtin: false })
+            let snippet = snippet(&fs::read_to_string(e.path()).unwrap_or_default());
+            Some(TemplateInfo { path, dirty: meta.dirty, remote_at: meta.remote_at, builtin: false, snippet })
         })
         .collect();
-    for (name, _) in BUILTIN_TEMPLATES {
+    for (name, body) in BUILTIN_TEMPLATES {
         if !out.iter().any(|d| d.path == name) {
-            out.push(TemplateInfo { path: name.into(), dirty: false, remote_at: None, builtin: true });
+            out.push(TemplateInfo {
+                path: name.into(),
+                dirty: false,
+                remote_at: None,
+                builtin: true,
+                snippet: snippet(body),
+            });
         }
     }
     out.sort_by_key(|d| (!d.builtin, d.path.to_lowercase()));
@@ -257,7 +330,7 @@ fn create_document(
     let body = read_template(app.clone(), user.clone(), template)?;
     let dir = ensure_doc_dir(&app, &user, &path)?;
     fs::write(dir.join("main.tex"), &body).map_err(|e| e.to_string())?;
-    write_meta(&dir.join(".sync.json"), &Meta { dirty: true, remote_at: None })?;
+    write_meta(&dir.join(".sync.json"), &Meta { dirty: true, ..Default::default() })?;
     Ok(body)
 }
 
@@ -273,9 +346,8 @@ fn save_template(
     if (path.exists() || builtin(&name).is_some()) && !overwrite {
         return Err("exists".into());
     }
-    let remote_at = read_meta(&meta_path).remote_at;
     fs::write(path, source).map_err(|e| e.to_string())?;
-    write_meta(&meta_path, &Meta { dirty: true, remote_at })
+    update_meta(&meta_path, |m| m.dirty = true)
 }
 
 #[tauri::command]
@@ -292,9 +364,7 @@ fn save_source(
 ) -> Result<(), String> {
     let dir = ensure_doc_dir(&app, &user, &path)?;
     fs::write(dir.join("main.tex"), source).map_err(|e| e.to_string())?;
-    let meta_path = dir.join(".sync.json");
-    let remote_at = read_meta(&meta_path).remote_at;
-    write_meta(&meta_path, &Meta { dirty: true, remote_at })
+    update_meta(&dir.join(".sync.json"), |m| m.dirty = true)
 }
 
 /// Writes a document received from the server. `dirty` is true only for conflict copies,
@@ -309,17 +379,28 @@ fn apply_remote(
     remote_at: Option<String>,
     dirty: bool,
 ) -> Result<(), String> {
-    let meta = Meta { dirty, remote_at };
+    let set = move |m: &mut Meta| {
+        m.dirty = dirty;
+        m.remote_at = remote_at;
+    };
     match kind.as_str() {
         "document" => {
             let dir = ensure_doc_dir(&app, &user, &path)?;
             fs::write(dir.join("main.tex"), source).map_err(|e| e.to_string())?;
-            write_meta(&dir.join(".sync.json"), &meta)
+            update_meta(&dir.join(".sync.json"), set)
+        }
+        "folder" => {
+            let dir = item_path(&app, &user, &path)?;
+            if is_document(&dir) {
+                return Err(format!("{path:?} is a document"));
+            }
+            fs::create_dir_all(&dir).map_err(|e| e.to_string())?;
+            update_meta(&dir.join(".sync.json"), set)
         }
         "template" => {
             let (file, meta_path) = template_paths(&app, &user, &path)?;
             fs::write(file, source).map_err(|e| e.to_string())?;
-            write_meta(&meta_path, &meta)
+            update_meta(&meta_path, set)
         }
         _ => Err(format!("unknown kind {kind:?}")),
     }
@@ -340,11 +421,21 @@ fn mark_synced(
             let dir = ensure_doc_dir(&app, &user, &path)?;
             (dir.join("main.tex"), dir.join(".sync.json"))
         }
+        "folder" => {
+            let dir = item_path(&app, &user, &path)?;
+            return update_meta(&dir.join(".sync.json"), |m| {
+                m.dirty = false;
+                m.remote_at = Some(remote_at);
+            });
+        }
         "template" => template_paths(&app, &user, &path)?,
         _ => return Err(format!("unknown kind {kind:?}")),
     };
     let unchanged = fs::read_to_string(file).map(|cur| cur == pushed).unwrap_or(false);
-    write_meta(&meta_path, &Meta { dirty: !unchanged, remote_at: Some(remote_at) })
+    update_meta(&meta_path, |m| {
+        m.dirty = !unchanged;
+        m.remote_at = Some(remote_at);
+    })
 }
 
 #[tauri::command]
@@ -399,15 +490,48 @@ fn save_image(app: tauri::AppHandle, request: Request<'_>) -> Result<String, Str
     Ok(format!("images/{name}"))
 }
 
-/// Raw body is a PNG of the first page; x-user and x-path (percent-encoded) say which document.
+/// The document dir for a preview. Previews never create documents.
+fn preview_dir(app: &tauri::AppHandle, user: &str, path: &str) -> Result<PathBuf, String> {
+    let dir = item_path(app, user, path)?;
+    if is_document(&dir) { Ok(dir) } else { Err(format!("no document {path:?}")) }
+}
+
+/// Raw body is a PNG of the first page, freshly rendered here; it must be uploaded on the next sync.
 #[tauri::command]
 fn save_preview(app: tauri::AppHandle, request: Request<'_>) -> Result<(), String> {
     let (user, path) = (header(&request, "x-user")?, header(&request, "x-path")?);
     let InvokeBody::Raw(bytes) = request.body() else {
         return Err("expected raw body".into());
     };
-    fs::write(ensure_doc_dir(&app, &user, &decode(&path))?.join("preview.png"), bytes)
-        .map_err(|e| e.to_string())
+    let dir = preview_dir(&app, &user, &decode(&path))?;
+    fs::write(dir.join("preview.png"), bytes).map_err(|e| e.to_string())?;
+    update_meta(&dir.join(".sync.json"), |m| m.preview_dirty = true)
+}
+
+/// Same body as `save_preview`, but for a preview downloaded from the server (x-preview-at is its marker).
+#[tauri::command]
+fn apply_preview(app: tauri::AppHandle, request: Request<'_>) -> Result<(), String> {
+    let (user, path, at) =
+        (header(&request, "x-user")?, header(&request, "x-path")?, header(&request, "x-preview-at")?);
+    let InvokeBody::Raw(bytes) = request.body() else {
+        return Err("expected raw body".into());
+    };
+    let dir = preview_dir(&app, &user, &decode(&path))?;
+    fs::write(dir.join("preview.png"), bytes).map_err(|e| e.to_string())?;
+    update_meta(&dir.join(".sync.json"), |m| {
+        m.preview_at = Some(at);
+        m.preview_dirty = false;
+    })
+}
+
+/// Records that the local preview was uploaded under marker `preview_at`.
+#[tauri::command]
+fn mark_preview(app: tauri::AppHandle, user: String, path: String, preview_at: String) -> Result<(), String> {
+    let dir = preview_dir(&app, &user, &path)?;
+    update_meta(&dir.join(".sync.json"), |m| {
+        m.preview_at = Some(preview_at);
+        m.preview_dirty = false;
+    })
 }
 
 #[tauri::command]
@@ -436,10 +560,133 @@ fn decode(s: &str) -> String {
     String::from_utf8_lossy(&out).into_owned()
 }
 
+#[tauri::command]
+fn list_deletions(app: tauri::AppHandle, user: String) -> Result<Vec<Tombstone>, String> {
+    read_tombstones(&app, &user)
+}
+
+#[tauri::command]
+fn clear_deletion(app: tauri::AppHandle, user: String, kind: String, path: String) -> Result<(), String> {
+    let mut t = read_tombstones(&app, &user)?;
+    t.retain(|x| !(x.kind == kind && x.path == path));
+    write_tombstones(&app, &user, &t)
+}
+
+fn add_tombstones(app: &tauri::AppHandle, user: &str, new: Vec<Tombstone>) -> Result<(), String> {
+    let mut t = read_tombstones(app, user)?;
+    t.retain(|x| !new.iter().any(|n| n.kind == x.kind && n.path == x.path));
+    t.extend(new);
+    write_tombstones(app, user, &t)
+}
+
+fn tombstones_for(items: &[(&'static str, String, Meta)]) -> Vec<Tombstone> {
+    items
+        .iter()
+        .filter_map(|(k, p, m)| {
+            m.remote_at.clone().map(|r| Tombstone { kind: (*k).into(), path: p.clone(), remote_at: r })
+        })
+        .collect()
+}
+
+/// Deletes a document, or a folder with everything in it. Anything the server knows about is
+/// recorded first, so the deletion survives a crash and reaches other devices on the next sync.
+#[tauri::command]
+fn delete_item(app: tauri::AppHandle, user: String, path: String) -> Result<(), String> {
+    let dir = item_path(&app, &user, &path)?;
+    if !dir.is_dir() {
+        return Err(format!("{path:?} not found"));
+    }
+    add_tombstones(&app, &user, tombstones_for(&collect_items(&dir, &path)))?;
+    fs::remove_dir_all(dir).map_err(|e| e.to_string())
+}
+
+/// Renames or moves a document or folder (they are the same operation: change the path).
+/// The server has no rename, so old paths are deleted and the new ones start as unsynced documents.
+#[tauri::command]
+fn move_item(app: tauri::AppHandle, user: String, from: String, to: String) -> Result<(), String> {
+    if to == from || to.starts_with(&format!("{from}/")) {
+        return Err("cannot move something into itself".into());
+    }
+    let from_dir = item_path(&app, &user, &from)?;
+    let to_dir = item_path(&app, &user, &to)?;
+    if !from_dir.is_dir() {
+        return Err(format!("{from:?} not found"));
+    }
+    if to_dir.exists() {
+        return Err(format!("{to:?} already exists"));
+    }
+    let items = collect_items(&from_dir, &from);
+    add_tombstones(&app, &user, tombstones_for(&items))?;
+    if let Some(parent) = to_dir.parent() {
+        fs::create_dir_all(parent).map_err(|e| e.to_string())?;
+    }
+    fs::rename(&from_dir, &to_dir).map_err(|e| e.to_string())?;
+    for (kind, old, _) in &items {
+        let dir = item_path(&app, &user, &format!("{to}{}", &old[from.len()..]))?;
+        let had_preview = *kind == "document" && dir.join("preview.png").is_file();
+        write_meta(
+            &dir.join(".sync.json"),
+            &Meta { dirty: true, preview_dirty: had_preview, ..Default::default() },
+        )?;
+    }
+    Ok(())
+}
+
+/// Deletes a user template (a built-in of the same name, if any, shows through again).
+#[tauri::command]
+fn delete_template(app: tauri::AppHandle, user: String, name: String) -> Result<(), String> {
+    let (file, meta_path) = template_paths(&app, &user, &name)?;
+    if !file.is_file() {
+        return Err(format!("{name:?} is a built-in template and cannot be deleted"));
+    }
+    if let Some(remote_at) = read_meta(&meta_path).remote_at {
+        add_tombstones(&app, &user, vec![Tombstone { kind: "template".into(), path: name, remote_at }])?;
+    }
+    fs::remove_file(file).map_err(|e| e.to_string())?;
+    let _ = fs::remove_file(meta_path);
+    Ok(())
+}
+
+/// Removes a local copy of something deleted on the server. Folders are only removed when empty.
+#[tauri::command]
+fn remove_local(app: tauri::AppHandle, user: String, kind: String, path: String) -> Result<(), String> {
+    if kind == "template" {
+        let (file, meta_path) = template_paths(&app, &user, &path)?;
+        let _ = fs::remove_file(file);
+        let _ = fs::remove_file(meta_path);
+        return Ok(());
+    }
+    let dir = item_path(&app, &user, &path)?;
+    match kind.as_str() {
+        "document" if is_document(&dir) => fs::remove_dir_all(dir).map_err(|e| e.to_string()),
+        "folder" if dir.is_dir() && !is_document(&dir) => {
+            let empty = fs::read_dir(&dir)
+                .map_err(|e| e.to_string())?
+                .flatten()
+                .all(|e| e.file_name() == ".sync.json");
+            if empty { fs::remove_dir_all(dir).map_err(|e| e.to_string()) } else { Ok(()) }
+        }
+        _ => Ok(()),
+    }
+}
+
 /// Compile `source` and return the PDF bytes. Prefers tectonic, falls back to pdflatex.
 #[tauri::command]
-fn compile(app: tauri::AppHandle, user: String, path: String, source: String) -> Result<Response, String> {
-    let dir = ensure_doc_dir(&app, &user, &path)?;
+fn compile(
+    app: tauri::AppHandle,
+    user: String,
+    path: String,
+    source: String,
+    scratch: bool,
+) -> Result<Response, String> {
+    // Templates have no folder of their own, so they compile in a throwaway directory.
+    let dir = if scratch {
+        let d = user_dir(&app, &user)?.join(".scratch");
+        fs::create_dir_all(&d).map_err(|e| e.to_string())?;
+        d
+    } else {
+        ensure_doc_dir(&app, &user, &path)?
+    };
     fs::write(dir.join("main.tex"), &source).map_err(|e| e.to_string())?;
 
     let out = run_engine(&dir)?;
@@ -490,7 +737,15 @@ pub fn run() {
             read_image,
             save_image,
             save_preview,
+            apply_preview,
+            mark_preview,
             read_preview,
+            list_deletions,
+            clear_deletion,
+            delete_item,
+            delete_template,
+            move_item,
+            remove_local,
             compile
         ])
         .run(tauri::generate_context!())

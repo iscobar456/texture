@@ -20,10 +20,17 @@
 
     <div id="app" hidden>
       <header>
-        <strong>hwscan</strong>
-        <button id="doc-button" title="Open or create a document">📄 <span id="doc-name"></span> ▾</button>
-        <button id="save-template">Save as template…</button>
-        <button id="compile">Compile (Ctrl+Enter)</button>
+        <div class="menu">
+          <button id="menu-button" aria-haspopup="menu" aria-expanded="false">☰ Menu</button>
+          <div id="menu-list" role="menu" hidden>
+            <button role="menuitem" id="compile">Compile <kbd>Ctrl+Enter</kbd></button>
+            <button role="menuitem" id="manage-templates">Manage templates…</button>
+            <button role="menuitem" class="stub" data-stub="Export PDF">Export PDF…</button>
+            <button role="menuitem" class="stub" data-stub="Settings">Settings…</button>
+            <button role="menuitem" class="stub" data-stub="About">About hwscan</button>
+          </div>
+        </div>
+        <button id="doc-button" title="Open or create a document">📄 <span id="doc-name"></span></button>
         <label><input type="checkbox" id="vim-toggle" /> Vim</label>
         <span id="status"></span>
         <span class="spacer"></span>
@@ -48,7 +55,16 @@
         <button id="new-document">New document…</button>
         <button id="picker-close">Close</button>
       </div>
-      <div id="doc-grid"></div>
+      <div id="doc-grid" class="grid"></div>
+    </dialog>
+
+    <dialog id="tpl-manager">
+      <div class="picker-head">
+        <strong>Templates</strong>
+        <span class="spacer"></span>
+        <button id="tpl-manager-close">Close</button>
+      </div>
+      <div id="tpl-grid" class="grid"></div>
     </dialog>
 
     <dialog id="folder-dialog">
@@ -56,7 +72,35 @@
         <h3>New folder</h3>
         <input id="folder-name" placeholder="Name" maxlength="64" required />
         <p class="error" id="folder-error"></p>
-        <div class="row"><button value="cancel" formnovalidate>Cancel</button><button value="ok">Create</button></div>
+        <div class="row"><button type="button" class="cancel">Cancel</button><button value="ok">Create</button></div>
+      </form>
+    </dialog>
+
+    <dialog id="rename-dialog">
+      <form method="dialog" id="rename-form">
+        <h3>Rename</h3>
+        <input id="rename-name" maxlength="64" required />
+        <p class="error" id="rename-error"></p>
+        <div class="row"><button type="button" class="cancel">Cancel</button><button value="ok">Rename</button></div>
+      </form>
+    </dialog>
+
+    <dialog id="move-dialog">
+      <form method="dialog" id="move-form">
+        <h3>Move</h3>
+        <p id="move-what" class="muted"></p>
+        <select id="move-target"></select>
+        <p class="error" id="move-error"></p>
+        <div class="row"><button type="button" class="cancel">Cancel</button><button value="ok">Move</button></div>
+      </form>
+    </dialog>
+
+    <dialog id="delete-dialog">
+      <form method="dialog" id="delete-form">
+        <h3>Delete</h3>
+        <p id="delete-what"></p>
+        <p class="error" id="delete-error"></p>
+        <div class="row"><button type="button" class="cancel">Cancel</button><button value="ok">Delete</button></div>
       </form>
     </dialog>
 
@@ -67,16 +111,16 @@
         <input id="new-name" placeholder="Name" maxlength="64" required />
         <select id="new-template"></select>
         <p class="error" id="new-error"></p>
-        <div class="row"><button value="cancel" formnovalidate>Cancel</button><button id="new-ok" value="ok">Create</button></div>
+        <div class="row"><button type="button" class="cancel">Cancel</button><button id="new-ok" value="ok">Create</button></div>
       </form>
     </dialog>
 
     <dialog id="tpl-dialog">
       <form method="dialog" id="tpl-form">
-        <h3>Save current document as template</h3>
+        <h3>Save as template</h3>
         <input id="tpl-name" placeholder="Template name" maxlength="64" required />
         <p class="error" id="tpl-error"></p>
-        <div class="row"><button value="cancel" formnovalidate>Cancel</button><button id="tpl-ok" value="ok">Save</button></div>
+        <div class="row"><button type="button" class="cancel">Cancel</button><button id="tpl-ok" value="ok">Save</button></div>
       </form>
     </dialog>
   </body>
