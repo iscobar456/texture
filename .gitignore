@@ -4,4 +4,5 @@ target/
 .dart_tool/
 build/
 .env*
+!.env.example
 supabase/.temp/

@@ -1,8 +1,8 @@
 {
   "$schema": "https://schema.tauri.app/config/2",
-  "productName": "appsdesktop",
+  "productName": "hwscan",
   "version": "0.1.0",
-  "identifier": "com.isaac.appsdesktop",
+  "identifier": "dev.hwscan.desktop",
   "build": {
     "beforeDevCommand": "npm run dev",
     "devUrl": "http://localhost:1420",
@@ -13,9 +13,9 @@
     "withGlobalTauri": true,
     "windows": [
       {
-        "title": "appsdesktop",
-        "width": 800,
-        "height": 600
+        "title": "hwscan",
+        "width": 1400,
+        "height": 850
       }
     ],
     "security": {

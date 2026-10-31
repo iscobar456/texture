@@ -2,42 +2,82 @@
 <html lang="en">
   <head>
     <meta charset="UTF-8" />
-    <link rel="stylesheet" href="/src/styles.css" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-    <title>Tauri App</title>
+    <link rel="stylesheet" href="/src/styles.css" />
+    <title>hwscan</title>
     <script type="module" src="/src/main.ts" defer></script>
   </head>
-
   <body>
-    <main class="container">
-      <h1>Welcome to Tauri</h1>
-
-      <div class="row">
-        <a href="https://vite.dev" target="_blank">
-          <img src="/src/assets/vite.svg" class="logo vite" alt="Vite logo" />
-        </a>
-        <a href="https://tauri.app" target="_blank">
-          <img
-            src="/src/assets/tauri.svg"
-            class="logo tauri"
-            alt="Tauri logo"
-          />
-        </a>
-        <a href="https://www.typescriptlang.org/docs" target="_blank">
-          <img
-            src="/src/assets/typescript.svg"
-            class="logo typescript"
-            alt="typescript logo"
-          />
-        </a>
-      </div>
-      <p>Click on the Tauri logo to learn more about the framework</p>
-
-      <form class="row" id="greet-form">
-        <input id="greet-input" placeholder="Enter a name..." />
-        <button type="submit">Greet</button>
+    <div id="auth">
+      <form id="login">
+        <h2>hwscan</h2>
+        <p id="auth-msg">Sign in to continue.</p>
+        <input id="email" type="email" placeholder="Email" required />
+        <input id="password" type="password" placeholder="Password" required />
+        <button>Sign in</button>
       </form>
-      <p id="greet-msg"></p>
-    </main>
+    </div>
+
+    <div id="app" hidden>
+      <header>
+        <strong>hwscan</strong>
+        <button id="doc-button" title="Open or create a document">📄 <span id="doc-name"></span> ▾</button>
+        <button id="save-template">Save as template…</button>
+        <button id="compile">Compile (Ctrl+Enter)</button>
+        <label><input type="checkbox" id="vim-toggle" /> Vim</label>
+        <span id="status"></span>
+        <span class="spacer"></span>
+        <span id="sync"></span>
+        <button id="sign-out">Sign out</button>
+      </header>
+      <main>
+        <section id="editor"></section>
+        <section id="preview"><div id="pages"></div><pre id="log" hidden></pre></section>
+        <aside id="inbox">
+          <h3>Photo inbox</h3>
+          <div id="inbox-list"></div>
+        </aside>
+      </main>
+    </div>
+
+    <dialog id="picker">
+      <div class="picker-head">
+        <div id="crumbs"></div>
+        <span class="spacer"></span>
+        <button id="new-folder">New folder…</button>
+        <button id="new-document">New document…</button>
+        <button id="picker-close">Close</button>
+      </div>
+      <div id="doc-grid"></div>
+    </dialog>
+
+    <dialog id="folder-dialog">
+      <form method="dialog" id="folder-form">
+        <h3>New folder</h3>
+        <input id="folder-name" placeholder="Name" maxlength="64" required />
+        <p class="error" id="folder-error"></p>
+        <div class="row"><button value="cancel" formnovalidate>Cancel</button><button value="ok">Create</button></div>
+      </form>
+    </dialog>
+
+    <dialog id="new-dialog">
+      <form method="dialog" id="new-form">
+        <h3>New document</h3>
+        <p id="new-in" class="muted"></p>
+        <input id="new-name" placeholder="Name" maxlength="64" required />
+        <select id="new-template"></select>
+        <p class="error" id="new-error"></p>
+        <div class="row"><button value="cancel" formnovalidate>Cancel</button><button id="new-ok" value="ok">Create</button></div>
+      </form>
+    </dialog>
+
+    <dialog id="tpl-dialog">
+      <form method="dialog" id="tpl-form">
+        <h3>Save current document as template</h3>
+        <input id="tpl-name" placeholder="Template name" maxlength="64" required />
+        <p class="error" id="tpl-error"></p>
+        <div class="row"><button value="cancel" formnovalidate>Cancel</button><button id="tpl-ok" value="ok">Save</button></div>
+      </form>
+    </dialog>
   </body>
 </html>
