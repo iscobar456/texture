@@ -1,0 +1,11 @@
+{
+  "name": "hwscan",
+  "private": true,
+  "workspaces": [
+    "apps/desktop",
+    "packages/*"
+  ],
+  "devDependencies": {
+    "supabase": "^2.122.0"
+  }
+}
