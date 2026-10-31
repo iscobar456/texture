@@ -25,17 +25,17 @@
           <div id="menu-list" role="menu" hidden>
             <button role="menuitem" id="compile">Compile <kbd>Ctrl+Enter</kbd></button>
             <button role="menuitem" id="manage-templates">Manage templates…</button>
-            <button role="menuitem" class="stub" data-stub="Export PDF">Export PDF…</button>
-            <button role="menuitem" class="stub" data-stub="Settings">Settings…</button>
+            <button role="menuitem" id="open-snippets">Snippets &amp; shortcuts…</button>
+            <button role="menuitem" id="export-pdf">Export PDF…</button>
+            <button role="menuitem" id="open-settings">Settings…</button>
             <button role="menuitem" class="stub" data-stub="About">About hwscan</button>
+            <button role="menuitem" id="sign-out">Sign out</button>
           </div>
         </div>
         <button id="doc-button" title="Open or create a document">📄 <span id="doc-name"></span></button>
-        <label><input type="checkbox" id="vim-toggle" /> Vim</label>
         <span id="status"></span>
         <span class="spacer"></span>
         <span id="sync"></span>
-        <button id="sign-out">Sign out</button>
       </header>
       <main>
         <section id="editor"></section>
@@ -46,6 +46,83 @@
         </aside>
       </main>
     </div>
+
+    <dialog id="snippets-dialog">
+      <div class="picker-head">
+        <strong>Snippets &amp; shortcuts</strong>
+        <span class="spacer"></span>
+        <button type="button" class="cancel">Close</button>
+      </div>
+      <div class="snip-layout">
+        <div class="snip-side">
+          <div id="snip-list"></div>
+          <button type="button" id="snip-new">New snippet</button>
+        </div>
+        <div class="snip-form">
+          <label>Trigger <input id="snip-trigger" placeholder="e.g. vv  (autocompletes as you type)" maxlength="32" autocomplete="off" /></label>
+          <label>Shortcut <input id="snip-key" placeholder="click, then press keys" readonly /></label>
+          <label>Description <input id="snip-desc" placeholder="optional" maxlength="80" /></label>
+          <label class="col">Inserts
+            <textarea id="snip-body" rows="7" spellcheck="false" placeholder="\vec{#{}}"></textarea>
+          </label>
+          <p class="muted">
+            Use <code>#{}</code> for a spot to jump to with Tab, and <code>#{text}</code> for one with placeholder text.
+            Repeat <code>#{1}</code> to fill several places at once. A shortcut needs Ctrl or Alt, and acts while typing
+            (not in Vim normal mode). Backspace clears it.
+          </p>
+          <p class="error" id="snip-error"></p>
+          <div class="row">
+            <button type="button" id="snip-delete">Delete</button>
+            <button type="button" id="snip-save">Save</button>
+          </div>
+        </div>
+      </div>
+    </dialog>
+
+    <dialog id="settings-dialog">
+      <form method="dialog" id="settings-form" class="settings">
+        <h3>Settings</h3>
+        <fieldset>
+          <legend>Appearance</legend>
+          <label>Theme
+            <select id="set-theme">
+              <option value="system">Match system</option>
+              <option value="light">Light</option>
+              <option value="dark">Dark</option>
+            </select>
+          </label>
+        </fieldset>
+        <fieldset>
+          <legend>Editor</legend>
+          <label>Color scheme <select id="set-editor-theme"></select></label>
+          <label>Default editing mode
+            <select id="set-editing">
+              <option value="normal">Normal</option>
+              <option value="vim">Vim</option>
+            </select>
+          </label>
+          <label>Font size <input id="set-font" type="number" min="10" max="28" step="1" /></label>
+          <label><input type="checkbox" id="set-wrap" /> Wrap long lines</label>
+          <label><input type="checkbox" id="set-linenos" /> Show line numbers</label>
+        </fieldset>
+        <fieldset>
+          <legend>Compiling</legend>
+          <label><input type="checkbox" id="set-auto" /> Compile automatically when I stop typing</label>
+        </fieldset>
+        <fieldset>
+          <legend>Documents</legend>
+          <label>Template for new documents <select id="set-template"></select></label>
+        </fieldset>
+        <fieldset>
+          <legend>Account</legend>
+          <span id="set-account" class="muted"></span>
+        </fieldset>
+        <div class="row">
+          <button type="button" id="settings-reset">Reset to defaults</button>
+          <button type="button" class="cancel">Close</button>
+        </div>
+      </form>
+    </dialog>
 
     <dialog id="picker">
       <div class="picker-head">

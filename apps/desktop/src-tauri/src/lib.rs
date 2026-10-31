@@ -107,13 +107,26 @@ fn valid_user(user: &str) -> Result<&str, String> {
     if ok { Ok(user) } else { Err("invalid user id".into()) }
 }
 
-/// ~/Documents/hwscan/<user_id>: one folder per account so signed-in users never share files.
+/// Writes via a temp file and rename, so a crash never leaves a half-written file behind.
+/// The temp name starts with '.', which every directory listing here already ignores.
+fn write_atomic(path: impl AsRef<std::path::Path>, data: impl AsRef<[u8]>) -> Result<(), String> {
+    use std::io::Write;
+    let path = path.as_ref();
+    let name = path.file_name().ok_or("bad path")?.to_string_lossy();
+    let tmp = path.with_file_name(format!(".{name}.tmp"));
+    let mut f = fs::File::create(&tmp).map_err(|e| e.to_string())?;
+    f.write_all(data.as_ref()).map_err(|e| e.to_string())?;
+    f.sync_all().map_err(|e| e.to_string())?;
+    fs::rename(&tmp, path).map_err(|e| e.to_string())
+}
+
+/// <app data dir>/<user_id>: private to the app (not in Documents), one folder per account so
+/// signed-in users never share files. PDFs leave the app only through Export.
 fn user_dir(app: &tauri::AppHandle, user: &str) -> Result<PathBuf, String> {
     let dir = app
         .path()
-        .document_dir()
+        .app_data_dir()
         .map_err(|e| e.to_string())?
-        .join("hwscan")
         .join(valid_user(user)?);
     fs::create_dir_all(&dir).map_err(|e| e.to_string())?;
     Ok(dir)
@@ -159,7 +172,7 @@ fn read_meta(path: &PathBuf) -> Meta {
 }
 
 fn write_meta(path: &PathBuf, meta: &Meta) -> Result<(), String> {
-    fs::write(path, serde_json::to_string(meta).map_err(|e| e.to_string())?)
+    write_atomic(path, serde_json::to_string(meta).map_err(|e| e.to_string())?)
         .map_err(|e| e.to_string())
 }
 
@@ -181,7 +194,7 @@ fn read_tombstones(app: &tauri::AppHandle, user: &str) -> Result<Vec<Tombstone>,
 }
 
 fn write_tombstones(app: &tauri::AppHandle, user: &str, t: &[Tombstone]) -> Result<(), String> {
-    fs::write(tombstone_file(app, user)?, serde_json::to_string(t).map_err(|e| e.to_string())?)
+    write_atomic(tombstone_file(app, user)?, serde_json::to_string(t).map_err(|e| e.to_string())?)
         .map_err(|e| e.to_string())
 }
 
@@ -329,7 +342,7 @@ fn create_document(
     }
     let body = read_template(app.clone(), user.clone(), template)?;
     let dir = ensure_doc_dir(&app, &user, &path)?;
-    fs::write(dir.join("main.tex"), &body).map_err(|e| e.to_string())?;
+    write_atomic(dir.join("main.tex"), &body).map_err(|e| e.to_string())?;
     write_meta(&dir.join(".sync.json"), &Meta { dirty: true, ..Default::default() })?;
     Ok(body)
 }
@@ -346,7 +359,7 @@ fn save_template(
     if (path.exists() || builtin(&name).is_some()) && !overwrite {
         return Err("exists".into());
     }
-    fs::write(path, source).map_err(|e| e.to_string())?;
+    write_atomic(path, source).map_err(|e| e.to_string())?;
     update_meta(&meta_path, |m| m.dirty = true)
 }
 
@@ -363,7 +376,7 @@ fn save_source(
     source: String,
 ) -> Result<(), String> {
     let dir = ensure_doc_dir(&app, &user, &path)?;
-    fs::write(dir.join("main.tex"), source).map_err(|e| e.to_string())?;
+    write_atomic(dir.join("main.tex"), source).map_err(|e| e.to_string())?;
     update_meta(&dir.join(".sync.json"), |m| m.dirty = true)
 }
 
@@ -386,7 +399,7 @@ fn apply_remote(
     match kind.as_str() {
         "document" => {
             let dir = ensure_doc_dir(&app, &user, &path)?;
-            fs::write(dir.join("main.tex"), source).map_err(|e| e.to_string())?;
+            write_atomic(dir.join("main.tex"), source).map_err(|e| e.to_string())?;
             update_meta(&dir.join(".sync.json"), set)
         }
         "folder" => {
@@ -399,7 +412,7 @@ fn apply_remote(
         }
         "template" => {
             let (file, meta_path) = template_paths(&app, &user, &path)?;
-            fs::write(file, source).map_err(|e| e.to_string())?;
+            write_atomic(file, source).map_err(|e| e.to_string())?;
             update_meta(&meta_path, set)
         }
         _ => Err(format!("unknown kind {kind:?}")),
@@ -442,7 +455,11 @@ fn mark_synced(
 fn list_images(app: tauri::AppHandle, user: String, path: String) -> Result<Vec<String>, String> {
     let dir = item_path(&app, &user, &path)?.join("images");
     let Ok(entries) = fs::read_dir(dir) else { return Ok(vec![]) };
-    Ok(entries.flatten().map(|e| e.file_name().to_string_lossy().to_string()).collect())
+    Ok(entries
+        .flatten()
+        .map(|e| e.file_name().to_string_lossy().to_string())
+        .filter(|n| !n.starts_with('.'))
+        .collect())
 }
 
 #[tauri::command]
@@ -485,7 +502,7 @@ fn save_image(app: tauri::AppHandle, request: Request<'_>) -> Result<String, Str
     let InvokeBody::Raw(bytes) = request.body() else {
         return Err("expected raw body".into());
     };
-    fs::write(ensure_doc_dir(&app, &user, &decode(&path))?.join("images").join(&name), bytes)
+    write_atomic(ensure_doc_dir(&app, &user, &decode(&path))?.join("images").join(&name), bytes)
         .map_err(|e| e.to_string())?;
     Ok(format!("images/{name}"))
 }
@@ -504,7 +521,7 @@ fn save_preview(app: tauri::AppHandle, request: Request<'_>) -> Result<(), Strin
         return Err("expected raw body".into());
     };
     let dir = preview_dir(&app, &user, &decode(&path))?;
-    fs::write(dir.join("preview.png"), bytes).map_err(|e| e.to_string())?;
+    write_atomic(dir.join("preview.png"), bytes).map_err(|e| e.to_string())?;
     update_meta(&dir.join(".sync.json"), |m| m.preview_dirty = true)
 }
 
@@ -517,7 +534,7 @@ fn apply_preview(app: tauri::AppHandle, request: Request<'_>) -> Result<(), Stri
         return Err("expected raw body".into());
     };
     let dir = preview_dir(&app, &user, &decode(&path))?;
-    fs::write(dir.join("preview.png"), bytes).map_err(|e| e.to_string())?;
+    write_atomic(dir.join("preview.png"), bytes).map_err(|e| e.to_string())?;
     update_meta(&dir.join(".sync.json"), |m| {
         m.preview_at = Some(at);
         m.preview_dirty = false;
@@ -671,6 +688,32 @@ fn remove_local(app: tauri::AppHandle, user: String, kind: String, path: String)
 }
 
 /// Compile `source` and return the PDF bytes. Prefers tectonic, falls back to pdflatex.
+fn build_pdf(
+    app: &tauri::AppHandle,
+    user: &str,
+    path: &str,
+    source: &str,
+    scratch: bool,
+) -> Result<Vec<u8>, String> {
+    // Templates have no folder of their own, so they compile in a throwaway directory.
+    let dir = if scratch {
+        let d = user_dir(app, user)?.join(".scratch");
+        fs::create_dir_all(&d).map_err(|e| e.to_string())?;
+        d
+    } else {
+        ensure_doc_dir(app, user, path)?
+    };
+    write_atomic(dir.join("main.tex"), source)?;
+
+    let out = run_engine(&dir)?;
+    if !out.status.success() {
+        let log = String::from_utf8_lossy(&out.stdout).to_string()
+            + &String::from_utf8_lossy(&out.stderr);
+        return Err(log);
+    }
+    fs::read(dir.join("main.pdf")).map_err(|e| e.to_string())
+}
+
 #[tauri::command]
 fn compile(
     app: tauri::AppHandle,
@@ -679,24 +722,21 @@ fn compile(
     source: String,
     scratch: bool,
 ) -> Result<Response, String> {
-    // Templates have no folder of their own, so they compile in a throwaway directory.
-    let dir = if scratch {
-        let d = user_dir(&app, &user)?.join(".scratch");
-        fs::create_dir_all(&d).map_err(|e| e.to_string())?;
-        d
-    } else {
-        ensure_doc_dir(&app, &user, &path)?
-    };
-    fs::write(dir.join("main.tex"), &source).map_err(|e| e.to_string())?;
+    build_pdf(&app, &user, &path, &source, scratch).map(Response::new)
+}
 
-    let out = run_engine(&dir)?;
-    if !out.status.success() {
-        let log = String::from_utf8_lossy(&out.stdout).to_string()
-            + &String::from_utf8_lossy(&out.stderr);
-        return Err(log);
-    }
-    let pdf = fs::read(dir.join("main.pdf")).map_err(|e| e.to_string())?;
-    Ok(Response::new(pdf))
+/// Compiles and writes the PDF to `dest`, a location the user picked. This is the only way a PDF leaves the app.
+#[tauri::command]
+fn export_pdf(
+    app: tauri::AppHandle,
+    user: String,
+    path: String,
+    source: String,
+    scratch: bool,
+    dest: String,
+) -> Result<(), String> {
+    let pdf = build_pdf(&app, &user, &path, &source, scratch)?;
+    write_atomic(dest, pdf)
 }
 
 fn run_engine(dir: &PathBuf) -> Result<std::process::Output, String> {
@@ -721,6 +761,7 @@ fn run_engine(dir: &PathBuf) -> Result<std::process::Output, String> {
 pub fn run() {
     tauri::Builder::default()
         .plugin(tauri_plugin_opener::init())
+        .plugin(tauri_plugin_dialog::init())
         .invoke_handler(tauri::generate_handler![
             list_documents,
             list_folders,
@@ -746,7 +787,8 @@ pub fn run() {
             delete_template,
             move_item,
             remove_local,
-            compile
+            compile,
+            export_pdf
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");

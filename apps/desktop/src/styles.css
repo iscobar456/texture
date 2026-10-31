@@ -21,19 +21,72 @@ main > * { min-height: 0; overflow: auto; border-right: 1px solid #8884; }
 .photo img { width: 100%; border-radius: 4px; }
 .photo .row { display: flex; gap: 6px; margin-top: 4px; }
 
-/* editor colors: low-contrast, follows OS scheme */
+/* Colors: follow the OS unless a theme is chosen in Settings (data-theme on <html>). */
 :root {
-  --cm-bg: #f6f5f1; --cm-fg: #3b3f46; --cm-muted: #9a9ea6; --cm-line: #ebe9e2;
+  --cm-bg: #f6f5f1; --cm-fg: #3b3f46; --cm-muted: #9a9ea6; --cm-line: rgba(70, 60, 20, 0.06);
   --cm-select: #cfd8e6; --cm-keyword: #5b6fa8; --cm-number: #a0714f;
   --cm-string: #6b8f5e; --cm-comment: #9aa09a; --cm-var: #8a5f8f;
 }
+:root[data-theme="light"] { color-scheme: light; }
+:root[data-theme="dark"] { color-scheme: dark; }
+:root[data-theme="dark"] {
+  --cm-bg: #2b2e34; --cm-fg: #c3c7cf; --cm-muted: #767b85; --cm-line: rgba(255, 255, 255, 0.05);
+  --cm-select: #3e4757; --cm-keyword: #8fa3d6; --cm-number: #c9a07e;
+  --cm-string: #9bb98c; --cm-comment: #7c8280; --cm-var: #bf9cc4;
+}
 @media (prefers-color-scheme: dark) {
-  :root {
-    --cm-bg: #2b2e34; --cm-fg: #c3c7cf; --cm-muted: #767b85; --cm-line: #32363d;
+  :root:not([data-theme="light"]) {
+    --cm-bg: #2b2e34; --cm-fg: #c3c7cf; --cm-muted: #767b85; --cm-line: rgba(255, 255, 255, 0.05);
     --cm-select: #3e4757; --cm-keyword: #8fa3d6; --cm-number: #c9a07e;
     --cm-string: #9bb98c; --cm-comment: #7c8280; --cm-var: #bf9cc4;
   }
 }
+
+
+/* Fixed editor palettes (Settings → Editor color scheme). Selectors are more specific than the app-theme rules above.
+   --cm-line is translucent on purpose: the selection is drawn behind the text, so an opaque line color would hide it. */
+html:root[data-editor-theme="github-light"] {
+  --cm-bg: #ffffff; --cm-fg: #24292f; --cm-muted: #8c959f; --cm-line: rgba(0, 0, 0, 0.05); --cm-select: #b6d6f7;
+  --cm-keyword: #cf222e; --cm-number: #0550ae; --cm-string: #0a3069; --cm-comment: #6e7781; --cm-var: #8250df;
+}
+html:root[data-editor-theme="solarized-light"] {
+  --cm-bg: #fdf6e3; --cm-fg: #586e75; --cm-muted: #93a1a1; --cm-line: rgba(0, 0, 0, 0.05); --cm-select: #d8d2b8;
+  --cm-keyword: #859900; --cm-number: #cb4b16; --cm-string: #2aa198; --cm-comment: #93a1a1; --cm-var: #268bd2;
+}
+html:root[data-editor-theme="gruvbox-light"] {
+  --cm-bg: #fbf1c7; --cm-fg: #3c3836; --cm-muted: #928374; --cm-line: rgba(0, 0, 0, 0.05); --cm-select: #d5c4a1;
+  --cm-keyword: #9d0006; --cm-number: #8f3f71; --cm-string: #79740e; --cm-comment: #928374; --cm-var: #076678;
+}
+html:root[data-editor-theme="solarized-dark"] {
+  --cm-bg: #002b36; --cm-fg: #93a1a1; --cm-muted: #586e75; --cm-line: rgba(255, 255, 255, 0.05); --cm-select: #0f4f5f;
+  --cm-keyword: #859900; --cm-number: #cb4b16; --cm-string: #2aa198; --cm-comment: #657b83; --cm-var: #268bd2;
+}
+html:root[data-editor-theme="gruvbox-dark"] {
+  --cm-bg: #282828; --cm-fg: #ebdbb2; --cm-muted: #928374; --cm-line: rgba(255, 255, 255, 0.05); --cm-select: #504945;
+  --cm-keyword: #fb4934; --cm-number: #d3869b; --cm-string: #b8bb26; --cm-comment: #928374; --cm-var: #83a598;
+}
+html:root[data-editor-theme="nord"] {
+  --cm-bg: #2e3440; --cm-fg: #d8dee9; --cm-muted: #616e88; --cm-line: rgba(255, 255, 255, 0.05); --cm-select: #434c5e;
+  --cm-keyword: #81a1c1; --cm-number: #b48ead; --cm-string: #a3be8c; --cm-comment: #616e88; --cm-var: #88c0d0;
+}
+html:root[data-editor-theme="one-dark"] {
+  --cm-bg: #282c34; --cm-fg: #abb2bf; --cm-muted: #5c6370; --cm-line: rgba(255, 255, 255, 0.05); --cm-select: #3e4451;
+  --cm-keyword: #c678dd; --cm-number: #d19a66; --cm-string: #98c379; --cm-comment: #5c6370; --cm-var: #61afef;
+}
+
+/* editor settings */
+.cm-editor { font-size: var(--editor-font-size, 14px); }
+#editor.no-gutters .cm-gutters { display: none; }
+
+/* settings dialog */
+#settings-dialog { width: min(460px, 92vw); border: 1px solid #8886; border-radius: 10px; }
+.settings { min-width: 0; gap: 12px; }
+.settings fieldset { display: flex; flex-direction: column; gap: 8px; border: 1px solid #8884; border-radius: 8px; margin: 0; }
+.settings legend { font-size: .8em; opacity: .7; padding: 0 4px; }
+.settings label { display: flex; align-items: center; justify-content: space-between; gap: 12px; }
+.settings label:has(input[type="checkbox"]) { justify-content: flex-start; }
+.settings input[type="number"] { width: 5em; }
+.settings .row { justify-content: space-between; }
 
 /* document picker */
 #picker, #tpl-manager { width: min(920px, 92vw); height: min(640px, 86vh); padding: 0; border: 1px solid #8886; border-radius: 10px; }
@@ -76,3 +129,21 @@ main > * { min-height: 0; overflow: auto; border-right: 1px solid #8884; }
   padding: 6px 10px; border-radius: 4px; font: inherit; color: inherit; cursor: pointer; }
 #menu-list button:hover { background: #8883; }
 #menu-list kbd { opacity: .6; font: inherit; font-size: .85em; }
+
+/* snippets dialog */
+#snippets-dialog { width: min(780px, 94vw); height: min(560px, 86vh); padding: 0; border: 1px solid #8886; border-radius: 10px; }
+#snippets-dialog[open] { display: flex; flex-direction: column; }
+.snip-layout { flex: 1; min-height: 0; display: grid; grid-template-columns: 220px 1fr; }
+.snip-side { display: flex; flex-direction: column; gap: 8px; padding: 10px; border-right: 1px solid #8884; overflow: hidden; }
+#snip-list { flex: 1; overflow: auto; display: flex; flex-direction: column; gap: 2px; }
+.snip-row { display: flex; justify-content: space-between; gap: 8px; text-align: left; border: none; background: none;
+  padding: 5px 8px; border-radius: 4px; font: inherit; color: inherit; cursor: pointer; }
+.snip-row:hover { background: #8882; }
+.snip-row.current { background: #8883; }
+.snip-form { display: flex; flex-direction: column; gap: 8px; padding: 12px; overflow: auto; }
+.snip-form label { display: flex; align-items: center; gap: 10px; }
+.snip-form label input { flex: 1; }
+.snip-form label.col { flex-direction: column; align-items: stretch; gap: 4px; }
+.snip-form textarea { font-family: ui-monospace, monospace; resize: vertical; }
+.snip-form .row { display: flex; justify-content: space-between; }
+.snip-form code { font-size: .9em; }

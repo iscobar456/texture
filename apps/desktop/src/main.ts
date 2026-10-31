@@ -1,4 +1,5 @@
 import { invoke } from "@tauri-apps/api/core";
+import { save } from "@tauri-apps/plugin-dialog";
 import { EditorView, basicSetup } from "codemirror";
 import { keymap } from "@codemirror/view";
 import { Compartment, Prec } from "@codemirror/state";
@@ -11,6 +12,10 @@ import * as pdfjs from "pdfjs-dist";
 import workerUrl from "pdfjs-dist/build/pdf.worker.min.mjs?url";
 import { createApi, type Photo } from "@hwscan/api";
 import { runSync } from "./sync";
+import { EditorState } from "@codemirror/state";
+import { latexSource, loadSnippets, snippetKeymap, userSnippets } from "./completions";
+import { initSnippetsUi } from "./snippets-ui";
+import { DEFAULTS, EDITOR_THEMES, loadSettings, saveSettings, applyAppearance, type Settings } from "./settings";
 
 pdfjs.GlobalWorkerOptions.workerSrc = workerUrl;
 
@@ -32,17 +37,21 @@ let templateName: string | null = null;
 // ---- editor ----
 let view: EditorView | undefined;
 const vimSlot = new Compartment();
+const wrapSlot = new Compartment();
+const snippetSlot = new Compartment();
+loadSnippets();
+
+let settings: Settings = loadSettings();
+applyAppearance(settings); // before sign-in, so the login screen is themed too
 let loadingDoc = false; // true while replacing the whole document, so it isn't saved as a user edit
 
-function vimPref(): boolean {
-  try { return localStorage.getItem("vim") !== "off"; } catch { return true; }
-}
 
 const source = () => view!.state.doc.toString();
 
 // What a pending edit belongs to; captured at edit time so switching documents can't misfile a save.
 let pendingDoc: { template: boolean; path: string } | null = null;
 let saveTimer: number | undefined;
+let autoTimer: number | undefined;
 
 async function flushSave() {
   clearTimeout(saveTimer);
@@ -61,10 +70,12 @@ function createEditor(doc: string) {
     extensions: [
       // Listed before vim() so Ctrl+Enter still wins over its key handling.
       Prec.highest(keymap.of([{ key: "Mod-Enter", run: () => (void compile(), true) }])),
-      vimSlot.of(vimPref() ? vim() : []),
+      snippetSlot.of(snippetKeymap(userSnippets())), // before vim(), at the same precedence, so it wins
+      vimSlot.of(settings.editing === "vim" ? vim() : []),
       basicSetup,
       StreamLanguage.define(stex),
-      EditorView.lineWrapping,
+      wrapSlot.of(settings.wrap ? EditorView.lineWrapping : []),
+      EditorState.languageData.of(() => [{ autocomplete: latexSource }]),
       softTheme,
       syntaxHighlighting(softHighlight),
       keymap.of([indentWithTab]),
@@ -73,6 +84,10 @@ function createEditor(doc: string) {
         pendingDoc = templateName !== null ? { template: true, path: templateName } : { template: false, path: docPath };
         clearTimeout(saveTimer);
         saveTimer = window.setTimeout(() => void flushSave(), 800);
+        if (settings.autoCompile) {
+          clearTimeout(autoTimer);
+          autoTimer = window.setTimeout(() => void compile(true), 1500);
+        }
       }),
     ],
   });
@@ -87,13 +102,16 @@ function setDoc(text: string) {
   }
 }
 
-const vimToggle = $<HTMLInputElement>("vim-toggle");
-vimToggle.checked = vimPref();
-vimToggle.addEventListener("change", () => {
-  try { localStorage.setItem("vim", vimToggle.checked ? "on" : "off"); } catch {}
-  view?.dispatch({ effects: vimSlot.reconfigure(vimToggle.checked ? vim() : []) });
-  view?.focus();
-});
+/** Pushes the current settings into the live editor and the page. */
+function applySettings() {
+  applyAppearance(settings);
+  view?.dispatch({
+    effects: [
+      vimSlot.reconfigure(settings.editing === "vim" ? vim() : []),
+      wrapSlot.reconfigure(settings.wrap ? EditorView.lineWrapping : []),
+    ],
+  });
+}
 
 // :w saves and compiles
 Vim.defineEx("write", "w", () => void compile());
@@ -107,7 +125,8 @@ function insertAtCursor(text: string) {
 // ---- compile + preview ----
 let compiling = false;
 
-async function compile() {
+/** `quiet` is for automatic compiles: a failure mid-typing shouldn't throw the error log at you. */
+async function compile(quiet = false) {
   if (compiling || !view) return;
   compiling = true;
   status("Compiling…");
@@ -119,9 +138,13 @@ async function compile() {
     if (thumb && templateName === null) void savePreview(docPath, thumb);
     status("Compiled");
   } catch (e) {
-    log.hidden = false;
-    log.textContent = String(e);
-    status("Compile failed");
+    if (quiet) {
+      status("Compile errors (press Ctrl+Enter to see them)");
+    } else {
+      log.hidden = false;
+      log.textContent = String(e);
+      status("Compile failed");
+    }
   } finally {
     compiling = false;
   }
@@ -156,7 +179,91 @@ async function savePreview(path: string, page: HTMLCanvasElement) {
   }).then(syncSoon, () => {});
 }
 
-$("compile").addEventListener("click", compile);
+$("compile").addEventListener("click", () => void compile());
+
+// Documents live in the app's private data folder; this is how a PDF gets out.
+$("export-pdf").addEventListener("click", async () => {
+  if (!view) return;
+  const target = templateName ?? docPath;
+  let dest = await save({
+    defaultPath: `${baseOf(target)}.pdf`,
+    filters: [{ name: "PDF", extensions: ["pdf"] }],
+  });
+  if (!dest) return;
+  if (!dest.toLowerCase().endsWith(".pdf")) dest += ".pdf";
+  status("Exporting…");
+  try {
+    await flushSave();
+    await invoke("export_pdf", { user, path: target, source: source(), scratch: templateName !== null, dest });
+    status(`Exported to ${dest}`);
+  } catch (e) {
+    $("log").hidden = false;
+    $("log").textContent = String(e);
+    status("Export failed");
+  }
+});
+
+// ---- snippets ----
+initSnippetsUi(() => view?.dispatch({ effects: snippetSlot.reconfigure(snippetKeymap(userSnippets())) }));
+
+// ---- settings ----
+const field = {
+  theme: $<HTMLSelectElement>("set-theme"),
+  editorTheme: $<HTMLSelectElement>("set-editor-theme"),
+  editing: $<HTMLSelectElement>("set-editing"),
+  font: $<HTMLInputElement>("set-font"),
+  wrap: $<HTMLInputElement>("set-wrap"),
+  linenos: $<HTMLInputElement>("set-linenos"),
+  auto: $<HTMLInputElement>("set-auto"),
+  template: $<HTMLSelectElement>("set-template"),
+};
+
+function showSettings() {
+  field.theme.value = settings.theme;
+  field.editorTheme.value = settings.editorTheme;
+  field.editing.value = settings.editing;
+  field.font.value = String(settings.fontSize);
+  field.wrap.checked = settings.wrap;
+  field.linenos.checked = settings.lineNumbers;
+  field.auto.checked = settings.autoCompile;
+}
+
+// Changes apply immediately; there is no OK button.
+function readSettings() {
+  const size = Number(field.font.value);
+  settings = {
+    theme: field.theme.value as Settings["theme"],
+    editorTheme: field.editorTheme.value as Settings["editorTheme"],
+    editing: field.editing.value as Settings["editing"],
+    fontSize: Number.isFinite(size) && size >= 10 && size <= 28 ? Math.round(size) : settings.fontSize,
+    wrap: field.wrap.checked,
+    lineNumbers: field.linenos.checked,
+    autoCompile: field.auto.checked,
+    defaultTemplate: field.template.value || settings.defaultTemplate,
+  };
+  saveSettings(settings);
+  applySettings();
+}
+
+field.editorTheme.replaceChildren(...EDITOR_THEMES.map(([value, label]) => new Option(label, value)));
+Object.values(field).forEach((el) => el.addEventListener("change", readSettings));
+
+$("settings-reset").addEventListener("click", () => {
+  settings = { ...DEFAULTS };
+  saveSettings(settings);
+  applySettings();
+  showSettings();
+});
+
+$("open-settings").addEventListener("click", async () => {
+  showSettings();
+  const templates = await invoke<TemplateInfo[]>("list_templates", { user });
+  field.template.replaceChildren(...templates.map((t) => new Option(t.path, t.path)));
+  field.template.value = templates.some((t) => t.path === settings.defaultTemplate) ? settings.defaultTemplate : templates[0].path;
+  const email = (await api.sb.auth.getSession()).data.session?.user.email;
+  $("set-account").textContent = email ? `Signed in as ${email}` : "";
+  $<HTMLDialogElement>("settings-dialog").showModal();
+});
 
 // ---- menu ----
 const menuList = $("menu-list");
@@ -504,7 +611,9 @@ $("folder-form").addEventListener("submit", async (e) => {
 // -- new document (created in the folder the picker is showing) --
 $("new-document").addEventListener("click", async () => {
   const templates = await invoke<TemplateInfo[]>("list_templates", { user });
-  $<HTMLSelectElement>("new-template").replaceChildren(...templates.map((t) => new Option(t.path, t.path)));
+  const tplSelect = $<HTMLSelectElement>("new-template");
+  tplSelect.replaceChildren(...templates.map((t) => new Option(t.path, t.path)));
+  if (templates.some((t) => t.path === settings.defaultTemplate)) tplSelect.value = settings.defaultTemplate;
   $("new-in").textContent = pickerFolder ? `in ${pickerFolder}/` : "at the top level";
   $("new-error").textContent = "";
   dialogOpen($<HTMLDialogElement>("new-dialog"), $<HTMLInputElement>("new-name"));
