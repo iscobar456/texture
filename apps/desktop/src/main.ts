@@ -13,7 +13,7 @@ import workerUrl from "pdfjs-dist/build/pdf.worker.min.mjs?url";
 import { createApi, type Photo } from "@hwscan/api";
 import { runSync } from "./sync";
 import { EditorState } from "@codemirror/state";
-import { latexSource, snippetKeymap } from "./completions";
+import { latexSource, showKey, snippetKeymap } from "./completions";
 import {
   DEFAULT_SNIPPETS_TOML,
   SNIPPETS_CONFIG,
@@ -29,6 +29,8 @@ import { toml } from "@codemirror/legacy-modes/mode/toml";
 import { initSnippetsUi } from "./snippets-ui";
 import { initShortcutsUi } from "./shortcuts";
 import { initLayout } from "./layout";
+import { initDialogs } from "./dialogs";
+import { initSwitcher, splitPath } from "./switcher";
 import { collectPending, initSyncUi, type Pending } from "./sync-ui";
 import { getCurrentWindow } from "@tauri-apps/api/window";
 import { DEFAULTS, EDITOR_THEMES, OCR_MODELS, loadSettings, saveSettings, applyAppearance, type Settings } from "./settings";
@@ -232,28 +234,44 @@ $("compile-log-toggle").addEventListener("click", () => {
   else setLog(null);
 });
 
+/** Bumped whenever the editor switches to a different document, template or the snippets file. */
+let viewEpoch = 0;
+/** A compile asked for while another was running; it runs afterwards, so the latest text always gets compiled. */
+let queuedCompile: { quiet: boolean } | null = null;
+
 /** `quiet` is for automatic compiles: a failure mid-typing shouldn't throw the error log at you. */
 async function compile(quiet = false) {
-  if (compiling || !view) return;
+  if (!view) return;
   if (snippetsOpen) {
     // Nothing to typeset: save, validate and apply the snippets file instead.
     pendingDoc = { kind: "snippets", path: SNIPPETS_CONFIG };
     await flushSave();
     return;
   }
+  if (compiling) {
+    // One manual request among the queued ones makes the whole follow-up manual (it should show errors).
+    queuedCompile = { quiet: (queuedCompile?.quiet ?? true) && quiet };
+    return;
+  }
   compiling = true;
   stale = false; // edits made while this runs mark it stale again
   setBar({ kind: "compiling" });
+  // What is being compiled, fixed now: by the time it finishes the editor may be showing something else.
+  const epoch = viewEpoch;
+  const path = docPath;
+  const scratch = templateName !== null;
   try {
-    const bytes = new Uint8Array(await invoke<ArrayBuffer>("compile", { user, path: templateName ?? docPath, source: source(), scratch: templateName !== null }));
+    const bytes = new Uint8Array(await invoke<ArrayBuffer>("compile", { user, path: scratch ? templateName : path, source: source(), scratch }));
+    if (epoch !== viewEpoch) return; // you moved on; this result belongs to something no longer open
     lastLog = "";
     setLog(null);
     const { first, pages } = await renderPdf(bytes);
-    if (first && templateName === null) void savePreview(docPath, first);
+    if (first && !scratch) void savePreview(path, first);
     const wasStale = stale; // typed while compiling
     setBar({ kind: "ok", text: `✓ Compiled ${new Date().toLocaleTimeString([], { hour: "numeric", minute: "2-digit" })} · ${pages} page${pages === 1 ? "" : "s"}` });
     if (wasStale) markStale();
   } catch (e) {
+    if (epoch !== viewEpoch) return;
     const wasStale = stale;
     lastLog = String(e);
     // A manual compile shows the log at once; an automatic one only reports it, with a link.
@@ -262,6 +280,11 @@ async function compile(quiet = false) {
     if (wasStale) markStale();
   } finally {
     compiling = false;
+    if (queuedCompile) {
+      const next = queuedCompile;
+      queuedCompile = null;
+      void compile(next.quiet);
+    }
   }
 }
 
@@ -319,6 +342,7 @@ $("export-pdf").addEventListener("click", async () => {
 });
 
 initShortcutsUi(() => settings.editing === "vim");
+initDialogs(() => view?.focus());
 const layout = initLayout();
 
 // ---- snippets: one user-owned TOML file (see default-snippets.toml) ----
@@ -358,13 +382,14 @@ function showSnippetStatus() {
 async function openSnippetsFile() {
   await flushSave();
   const text = (await invoke<string | null>("load_config", { user, name: SNIPPETS_CONFIG })) ?? DEFAULT_SNIPPETS_TOML;
+  viewEpoch++;
   snippetsOpen = true;
   templateName = null;
   if (view) setDoc(text);
   else createEditor(text);
   applyEditorMode();
   $("pages").replaceChildren();
-  $("doc-name").textContent = "Snippets file";
+  setDocLabel("", "Snippets file");
   markOpenItem(syncUi.getPending());
   showSnippetStatus();
   view?.focus();
@@ -500,17 +525,91 @@ $("open-settings").addEventListener("click", async () => {
   $<HTMLDialogElement>("settings-dialog").showModal();
 });
 
+// ---- quick switcher (Ctrl+P) ----
+const switcher = initSwitcher({
+  docs: () => invoke<DocInfo[]>("list_documents", { user }),
+  recents,
+  current: () => (templateName === null && !snippetsOpen ? docPath : ""),
+  open: (path) => openDocument(path),
+  create: async (path) => {
+    await invoke("create_document", { user, path, template: settings.defaultTemplate });
+    await openDocument(path);
+  },
+});
+
+// App-level shortcuts. Captured early so the editor (and Vim) never see them; ignored while a dialog is open.
+document.addEventListener(
+  "keydown",
+  (e) => {
+    if (!user || !(e.ctrlKey || e.metaKey) || e.altKey || e.shiftKey) return;
+    if (e.key.toLowerCase() === "p" && !document.querySelector("dialog[open]")) {
+      e.preventDefault();
+      e.stopPropagation();
+      void switcher.open();
+    } else if (e.key === "," && !document.querySelector("dialog[open]")) {
+      e.preventDefault();
+      e.stopPropagation();
+      $("open-settings").click();
+    }
+  },
+  true,
+);
+
 // ---- menu ----
 const menuList = $("menu-list");
-const setMenu = (open: boolean) => {
+const menuButton = $<HTMLButtonElement>("menu-button");
+const menuItems = () => [...menuList.querySelectorAll<HTMLButtonElement>('button[role="menuitem"]:not(:disabled)')];
+
+// Shortcut hints come from the same key names the editor uses, so they read ⌘ on a Mac.
+document.querySelectorAll<HTMLElement>("#menu-list kbd[data-key]").forEach((k) => {
+  k.textContent = showKey(k.dataset.key!).split("-").join("+");
+});
+
+function setMenu(open: boolean, focusFirst = false) {
+  const hadFocus = menuList.contains(document.activeElement);
   menuList.hidden = !open;
-  $("menu-button").setAttribute("aria-expanded", String(open));
-};
-$("menu-button").addEventListener("click", (e) => { e.stopPropagation(); setMenu(menuList.hasAttribute("hidden")); });
+  menuButton.setAttribute("aria-expanded", String(open));
+  if (open && focusFirst) menuItems()[0]?.focus();
+  if (!open && hadFocus) menuButton.focus(); // keyboard users land back on the button
+}
+
+menuButton.addEventListener("click", (e) => {
+  e.stopPropagation();
+  setMenu(menuList.hasAttribute("hidden"), true);
+});
+menuButton.addEventListener("keydown", (e) => {
+  if (e.key === "ArrowDown") {
+    e.preventDefault();
+    setMenu(true, true);
+  }
+});
+
+// Arrow keys move, Home/End jump, a typed letter jumps to the next item starting with it.
+menuList.addEventListener("keydown", (e) => {
+  const items = menuItems();
+  const i = items.indexOf(document.activeElement as HTMLButtonElement);
+  const go = (n: number) => { e.preventDefault(); items[(n + items.length) % items.length]?.focus(); };
+  if (e.key === "ArrowDown") go(i + 1);
+  else if (e.key === "ArrowUp") go(i - 1);
+  else if (e.key === "Home") go(0);
+  else if (e.key === "End") go(items.length - 1);
+  else if (e.key === "Tab") setMenu(false);
+  else if (e.key.length === 1 && /\S/.test(e.key) && !e.ctrlKey && !e.metaKey) {
+    const k = e.key.toLowerCase();
+    const order = [...items.slice(i + 1), ...items.slice(0, i + 1)];
+    order.find((b) => b.textContent!.trim().toLowerCase().startsWith(k))?.focus();
+  }
+});
+
 // Any item (or a click elsewhere, or Escape) closes the menu.
-menuList.addEventListener("click", () => setMenu(false));
+menuList.addEventListener("click", () => {
+  menuList.hidden = true;
+  menuButton.setAttribute("aria-expanded", "false");
+  // Back to typing, unless the item opened a dialog (which has taken focus).
+  if (!document.querySelector("dialog[open]")) view?.focus();
+});
 document.addEventListener("click", () => setMenu(false));
-document.addEventListener("keydown", (e) => { if (e.key === "Escape") setMenu(false); });
+document.addEventListener("keydown", (e) => { if (e.key === "Escape" && !menuList.hidden) setMenu(false); });
 document.querySelectorAll<HTMLButtonElement>("#menu-list .stub").forEach((b) =>
   b.addEventListener("click", () => status(`${b.dataset.stub}: not implemented yet`)),
 );
@@ -520,8 +619,30 @@ const lastKey = () => `hwscan:last:${user}`;
 const parentOf = (path: string) => path.slice(0, Math.max(path.lastIndexOf("/"), 0));
 const baseOf = (path: string) => path.slice(path.lastIndexOf("/") + 1);
 
+/** The document button: folder part dimmed, name in full strength; the whole path is the tooltip. */
+function setDocLabel(dir: string, name: string, full = dir + name) {
+  $("crumb-dir").textContent = dir;
+  $("crumb-name").textContent = name;
+  $("doc-button").title = `${full}\nOpen or create a document (Ctrl+P to search)`;
+}
+
+// Most recently opened documents, newest first, kept per account on this device.
+const recentKey = () => `hwscan:recent:${user}`;
+function recents(): string[] {
+  try {
+    const v = JSON.parse(localStorage.getItem(recentKey()) ?? "[]");
+    return Array.isArray(v) ? v.filter((x): x is string => typeof x === "string") : [];
+  } catch {
+    return [];
+  }
+}
+function recordRecent(path: string) {
+  try { localStorage.setItem(recentKey(), JSON.stringify([path, ...recents().filter((p) => p !== path)].slice(0, 30))); } catch {}
+}
+
 async function openDocument(path: string) {
   await flushSave();
+  viewEpoch++;
   docPath = path;
   templateName = null;
   snippetsOpen = false;
@@ -532,14 +653,17 @@ async function openDocument(path: string) {
   applyEditorMode();
   $("pages").replaceChildren();
   resetBar();
-  $("doc-name").textContent = path;
+  setDocLabel(splitPath(path).dir, splitPath(path).name, path);
+  recordRecent(path);
   markOpenItem(syncUi.getPending());
   void refreshInbox();
   syncSoon();
+  void compile(true); // so the preview is there when you arrive; an error only shows in the status bar
 }
 
 async function openTemplate(name: string) {
   await flushSave();
+  viewEpoch++;
   templateName = name;
   snippetsOpen = false;
   const text = await invoke<string>("read_template", { user, name });
@@ -548,7 +672,7 @@ async function openTemplate(name: string) {
   applyEditorMode();
   $("pages").replaceChildren();
   resetBar();
-  $("doc-name").textContent = `Template: ${name}`;
+  setDocLabel("Template / ", name);
   markOpenItem(syncUi.getPending());
 }
 
@@ -602,12 +726,22 @@ document.addEventListener("click", () => document.querySelectorAll(".popup").for
 let pickerFolder = ""; // "" is the top level
 let previewUrls: string[] = [];
 
+const FOLDER_ICON =
+  '<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M3 6.5A1.5 1.5 0 0 1 4.5 5h4.2l2 2.3h8.8A1.5 1.5 0 0 1 21 8.8v8.7a1.5 1.5 0 0 1-1.5 1.5h-15A1.5 1.5 0 0 1 3 17.5z" fill="currentColor"/></svg>';
+
 /** A small amber dot marking something that has not been uploaded yet. */
 function dotEl(tip: string): HTMLElement {
   const dot = document.createElement("span");
   dot.className = "dot warn";
   dot.title = tip;
   return dot;
+}
+
+/** Goes to the parent of the folder the picker is showing (no-op at the top level). */
+function pickerUp() {
+  if (!pickerFolder) return;
+  pickerFolder = parentOf(pickerFolder);
+  void renderPicker();
 }
 
 async function renderPicker() {
@@ -618,6 +752,8 @@ async function renderPicker() {
     invoke<FolderInfo[]>("list_folders", { user }),
   ]);
   const folders = folderInfos.map((f) => f.path);
+
+  $("picker-up").hidden = pickerFolder === "";
 
   // Breadcrumb: Documents / Physics / Week 3
   const crumbs = $("crumbs");
@@ -658,7 +794,7 @@ async function renderPicker() {
     const card = makeCard("folder", f, "folder", () => { pickerFolder = f; void renderPicker(); });
     const thumb = document.createElement("div");
     thumb.className = "thumb";
-    thumb.textContent = "📁";
+    thumb.innerHTML = FOLDER_ICON;
     const title = document.createElement("div");
     title.className = "title";
     title.textContent = baseOf(f);
@@ -713,6 +849,16 @@ $("doc-button").addEventListener("click", async () => {
   await renderPicker();
   $<HTMLDialogElement>("picker").showModal();
 });
+$("picker-up").addEventListener("click", pickerUp);
+// File-manager habits: Alt+Up or Backspace (when not typing in a field) goes up a folder.
+$("picker").addEventListener("keydown", (e) => {
+  const typing = (e.target as HTMLElement).closest("input, textarea, select") !== null;
+  if ((e.altKey && e.key === "ArrowUp") || (e.key === "Backspace" && !typing && !e.ctrlKey && !e.metaKey && !e.altKey)) {
+    if (!pickerFolder) return;
+    e.preventDefault();
+    pickerUp();
+  }
+});
 $("picker-close").addEventListener("click", () => $<HTMLDialogElement>("picker").close());
 
 // -- rename / move / delete --
@@ -724,7 +870,7 @@ function followMove(from: string, to: string) {
   const next = remap(docPath, from, to);
   if (next === docPath) return;
   docPath = next;
-  $("doc-name").textContent = next;
+  setDocLabel(splitPath(next).dir, splitPath(next).name, next);
   try { localStorage.setItem(lastKey(), next); } catch {}
 }
 

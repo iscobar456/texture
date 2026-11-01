@@ -21,19 +21,29 @@
     <div id="app" hidden>
       <header>
         <div class="menu">
-          <button id="menu-button" aria-haspopup="menu" aria-expanded="false">☰ Menu</button>
+          <button id="menu-button" class="hbtn" aria-haspopup="menu" aria-expanded="false" title="Menu">
+            <svg viewBox="0 0 16 16" width="16" height="16" aria-hidden="true"><path d="M2.5 4h11M2.5 8h11M2.5 12h11" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round"/></svg>
+            <span>Menu</span>
+          </button>
           <div id="menu-list" role="menu" hidden>
-            <button role="menuitem" id="compile">Compile <kbd>Ctrl+Enter</kbd></button>
-            <button role="menuitem" id="manage-templates">Manage templates…</button>
-            <button role="menuitem" id="open-shortcuts">Keyboard shortcuts…</button>
-            <button role="menuitem" id="open-snippets">Snippets…</button>
-            <button role="menuitem" id="export-pdf">Export PDF…</button>
-            <button role="menuitem" id="open-settings">Settings…</button>
-            <button role="menuitem" class="stub" data-stub="About">About hwscan</button>
-            <button role="menuitem" id="sign-out">Sign out</button>
+            <button role="menuitem" id="compile"><span>Compile</span><kbd data-key="Mod-Enter"></kbd></button>
+            <button role="menuitem" id="export-pdf"><span>Export PDF…</span></button>
+            <hr role="separator" />
+            <button role="menuitem" id="open-snippets"><span>Snippets…</span></button>
+            <button role="menuitem" id="manage-templates"><span>Manage templates…</span></button>
+            <hr role="separator" />
+            <button role="menuitem" id="open-shortcuts"><span>Keyboard shortcuts…</span></button>
+            <button role="menuitem" id="open-settings"><span>Settings…</span><kbd data-key="Mod-,"></kbd></button>
+            <hr role="separator" />
+            <button role="menuitem" class="stub" data-stub="About"><span>About hwscan</span></button>
+            <button role="menuitem" id="sign-out"><span>Sign out</span></button>
           </div>
         </div>
-        <button id="doc-button" title="Open or create a document">📄 <span id="doc-name"></span><span id="doc-dirty" class="dot warn" title="Not uploaded yet" hidden></span></button>
+        <button id="doc-button" class="hbtn" title="Open or create a document (Ctrl+P to search)">
+          <svg viewBox="0 0 16 16" width="16" height="16" aria-hidden="true"><path d="M4 1.8h5l3.2 3.2v8.2a1 1 0 0 1-1 1H4a1 1 0 0 1-1-1V2.8a1 1 0 0 1 1-1zM9 1.8V5h3.2" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linejoin="round"/></svg>
+          <span class="crumb"><span id="crumb-dir"></span><span id="crumb-name"></span></span>
+          <span id="doc-dirty" class="dot warn" title="Not uploaded yet" hidden></span>
+        </button>
         <span id="status"></span>
         <span class="spacer"></span>
         <button id="sync" class="sync-chip" title="Sync status - click for details"></button>
@@ -67,23 +77,23 @@
     </div>
 
     <dialog id="shortcuts-dialog">
-      <div class="picker-head">
+      <div class="dlg-head">
         <strong>Keyboard shortcuts</strong>
         <input id="shortcuts-search" type="search" placeholder="Search…" autocomplete="off" />
         <span class="spacer"></span>
-        <button type="button" class="cancel">Close</button>
+        <button type="button" class="cancel icon-btn" aria-label="Close" title="Close (Esc)"><svg viewBox="0 0 16 16" width="14" height="14" aria-hidden="true"><path d="M3.5 3.5l9 9M12.5 3.5l-9 9" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round"/></svg></button>
       </div>
       <div id="shortcuts-body"></div>
     </dialog>
 
     <dialog id="snippets-dialog">
-      <div class="picker-head">
+      <div class="dlg-head">
         <strong>Snippets</strong>
         <input id="snip-search" type="search" placeholder="Search…" autocomplete="off" />
         <span class="spacer"></span>
         <button type="button" id="snip-edit">Edit snippets file</button>
         <button type="button" id="snip-reset">Reset to defaults…</button>
-        <button type="button" class="cancel">Close</button>
+        <button type="button" class="cancel icon-btn" aria-label="Close" title="Close (Esc)"><svg viewBox="0 0 16 16" width="14" height="14" aria-hidden="true"><path d="M3.5 3.5l9 9M12.5 3.5l-9 9" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round"/></svg></button>
       </div>
       <div id="snip-errors" hidden></div>
       <p class="muted snip-intro">
@@ -159,22 +169,29 @@
         </fieldset>
         <div class="row">
           <button type="button" id="settings-reset">Reset to defaults</button>
-          <button type="button" class="cancel">Close</button>
+          <button type="button" class="cancel primary">Done</button>
         </div>
       </form>
     </dialog>
 
+    <dialog id="switcher">
+      <input id="switcher-input" type="text" placeholder="Search documents…  (Enter to open)" autocomplete="off" spellcheck="false"
+             role="combobox" aria-expanded="true" aria-controls="switcher-list" />
+      <div id="switcher-list" role="listbox"></div>
+      <div id="switcher-error" class="error"></div>
+    </dialog>
+
     <dialog id="sync-dialog">
-      <div class="picker-head">
+      <div class="dlg-head">
         <strong>Sync</strong>
         <span class="spacer"></span>
         <button type="button" id="sync-now">Sync now</button>
-        <button type="button" class="cancel">Close</button>
+        <button type="button" class="cancel icon-btn" aria-label="Close" title="Close (Esc)"><svg viewBox="0 0 16 16" width="14" height="14" aria-hidden="true"><path d="M3.5 3.5l9 9M12.5 3.5l-9 9" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round"/></svg></button>
       </div>
       <div id="sync-body"></div>
     </dialog>
 
-    <dialog id="closing-dialog">
+    <dialog id="closing-dialog" data-persistent>
       <form method="dialog">
         <h3>Closing hwscan</h3>
         <p>Saving and syncing your changes first…</p>
@@ -184,21 +201,24 @@
     </dialog>
 
     <dialog id="picker">
-      <div class="picker-head">
+      <div class="dlg-head">
+        <button id="picker-up" class="icon-btn" hidden aria-label="Up to the parent folder" title="Up to the parent folder (Alt+↑ or Backspace)">
+          <svg viewBox="0 0 16 16" width="16" height="16" aria-hidden="true"><path d="M13 8H3.5M7.5 3.5L3 8l4.5 4.5" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"/></svg>
+        </button>
         <div id="crumbs"></div>
         <span class="spacer"></span>
         <button id="new-folder">New folder…</button>
         <button id="new-document">New document…</button>
-        <button id="picker-close">Close</button>
+        <button id="picker-close" class="icon-btn" aria-label="Close" title="Close (Esc)"><svg viewBox="0 0 16 16" width="14" height="14" aria-hidden="true"><path d="M3.5 3.5l9 9M12.5 3.5l-9 9" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round"/></svg></button>
       </div>
       <div id="doc-grid" class="grid"></div>
     </dialog>
 
     <dialog id="tpl-manager">
-      <div class="picker-head">
+      <div class="dlg-head">
         <strong>Templates</strong>
         <span class="spacer"></span>
-        <button id="tpl-manager-close">Close</button>
+        <button id="tpl-manager-close" class="icon-btn" aria-label="Close" title="Close (Esc)"><svg viewBox="0 0 16 16" width="14" height="14" aria-hidden="true"><path d="M3.5 3.5l9 9M12.5 3.5l-9 9" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round"/></svg></button>
       </div>
       <div id="tpl-grid" class="grid"></div>
     </dialog>

@@ -580,7 +580,12 @@ fn save_preview(app: tauri::AppHandle, request: Request<'_>) -> Result<(), Strin
         return Err("expected raw body".into());
     };
     let dir = preview_dir(&app, &user, &decode(&path))?;
-    write_atomic(dir.join("preview.png"), bytes).map_err(|e| e.to_string())?;
+    let file = dir.join("preview.png");
+    // Compiling on open re-renders unchanged documents; an identical image needs no write and no upload.
+    if fs::read(&file).map(|old| old == *bytes).unwrap_or(false) {
+        return Ok(());
+    }
+    write_atomic(file, bytes).map_err(|e| e.to_string())?;
     update_meta(&dir.join(".sync.json"), |m| m.preview_dirty = true)
 }
 

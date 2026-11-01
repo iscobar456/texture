@@ -19,6 +19,9 @@ function sections(vimOn: boolean): Section[] {
       title: "App",
       rows: [
         ["Mod-Enter", "Compile and refresh the preview"],
+        ["Mod-p", "Search all documents and open one (or create it)"],
+        ["Mod-,", "Open Settings"],
+        ["ArrowDown / ArrowUp", "Move through an open menu or the document search results"],
         ["Escape", "Close the menu or a dialog"],
         ["Enter", "Confirm a dialog; open the focused card in the document or template picker"],
       ],
