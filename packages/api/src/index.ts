@@ -24,6 +24,11 @@ const isDocTable = (k: DocKind) => k === "document" || k === "folder";
 
 export function createApi(url: string, anonKey: string) {
   const sb: SupabaseClient = createClient(url, anonKey);
+  /** "<uid>/<document path>/preview.png", or "<uid>/.templates/<name>/preview.png" (document paths never start with '.'). */
+  const previewKey = async (kind: "document" | "template", path: string) => {
+    const uid = (await sb.auth.getSession()).data.session?.user.id;
+    return `${uid}/${kind === "template" ? `.templates/${path}` : path}/preview.png`;
+  };
   return {
     sb,
     async listPending(): Promise<Photo[]> {
@@ -43,7 +48,7 @@ export function createApi(url: string, anonKey: string) {
     // ---- synced documents and templates ----
     /** Includes soft-deleted rows: a tombstone is how this device learns of a deletion. */
     async listDocs(kind: DocKind): Promise<RemoteDoc[]> {
-      const cols = isDocTable(kind) ? "path, updated_at, deleted_at, preview_at" : "path, updated_at, deleted_at";
+      const cols = kind === "config" ? "path, updated_at, deleted_at" : "path, updated_at, deleted_at, preview_at";
       let q = sb.from(table(kind)).select(cols);
       if (isDocTable(kind)) q = q.eq("kind", kind);
       const { data, error } = await q;
@@ -91,21 +96,23 @@ export function createApi(url: string, anonKey: string) {
       if (error) throw error;
       return data.length > 0;
     },
-    async setPreviewAt(path: string, marker: string): Promise<boolean> {
-      const { data, error } = await sb.from("documents").update({ preview_at: marker }).eq("path", path).is("deleted_at", null).select("path");
+    async setPreviewAt(kind: "document" | "template", path: string, marker: string): Promise<boolean> {
+      const { data, error } = await sb.from(table(kind)).update({ preview_at: marker }).eq("path", path).is("deleted_at", null).select("path");
       if (error) throw error;
       return data.length > 0;
     },
-    async uploadPreview(docPath: string, bytes: Uint8Array) {
-      const uid = (await sb.auth.getSession()).data.session?.user.id;
-      const { error } = await sb.storage.from(FILES_BUCKET).upload(`${uid}/${docPath}/preview.png`, bytes, { upsert: true, contentType: "image/png" });
+    async uploadPreview(kind: "document" | "template", path: string, bytes: Uint8Array) {
+      const { error } = await sb.storage.from(FILES_BUCKET).upload(await previewKey(kind, path), bytes, { upsert: true, contentType: "image/png" });
       if (error) throw error;
     },
-    async downloadPreview(docPath: string): Promise<Uint8Array | null> {
-      const uid = (await sb.auth.getSession()).data.session?.user.id;
-      const { data, error } = await sb.storage.from(FILES_BUCKET).download(`${uid}/${docPath}/preview.png`);
+    async downloadPreview(kind: "document" | "template", path: string): Promise<Uint8Array | null> {
+      const { data, error } = await sb.storage.from(FILES_BUCKET).download(await previewKey(kind, path));
       if (error) return null; // not uploaded (yet)
       return new Uint8Array(await data.arrayBuffer());
+    },
+    /** Best-effort: a deleted template's thumbnail. */
+    async removePreview(kind: "document" | "template", path: string) {
+      await sb.storage.from(FILES_BUCKET).remove([await previewKey(kind, path)]);
     },
     /** Best-effort cleanup of a deleted document's images and preview. */
     async removeDocFiles(docPath: string) {

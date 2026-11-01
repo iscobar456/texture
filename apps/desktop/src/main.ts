@@ -39,7 +39,7 @@ pdfjs.GlobalWorkerOptions.workerSrc = workerUrl;
 
 type Api = ReturnType<typeof createApi>;
 type DocInfo = { path: string; dirty: boolean; snippet: string; has_preview: boolean };
-type TemplateInfo = { path: string; builtin: boolean };
+type TemplateInfo = { path: string; builtin: boolean; dirty: boolean; has_preview: boolean };
 type FolderInfo = { path: string };
 
 const $ = <T extends HTMLElement>(id: string) => document.getElementById(id) as T;
@@ -259,14 +259,15 @@ async function compile(quiet = false) {
   // What is being compiled, fixed now: by the time it finishes the editor may be showing something else.
   const epoch = viewEpoch;
   const path = docPath;
-  const scratch = templateName !== null;
+  const tname = templateName;
+  const scratch = tname !== null;
   try {
-    const bytes = new Uint8Array(await invoke<ArrayBuffer>("compile", { user, path: scratch ? templateName : path, source: source(), scratch }));
+    const bytes = new Uint8Array(await invoke<ArrayBuffer>("compile", { user, path: scratch ? tname : path, source: source(), scratch }));
     if (epoch !== viewEpoch) return; // you moved on; this result belongs to something no longer open
     lastLog = "";
     setLog(null);
     const { first, pages } = await renderPdf(bytes);
-    if (first && !scratch) void savePreview(path, first);
+    if (first) void (scratch ? saveTemplateThumb(tname, first) : savePreview(path, first));
     const wasStale = stale; // typed while compiling
     setBar({ kind: "ok", text: `✓ Compiled ${new Date().toLocaleTimeString([], { hour: "numeric", minute: "2-digit" })} · ${pages} page${pages === 1 ? "" : "s"}` });
     if (wasStale) markStale();
@@ -304,17 +305,44 @@ async function renderPdf(data: Uint8Array): Promise<{ first: HTMLCanvasElement |
   return { first: canvases[0], pages: canvases.length };
 }
 
-/** Stores a small PNG of page 1 for the document picker. Best effort. */
-async function savePreview(path: string, page: HTMLCanvasElement) {
+/** A page canvas shrunk to a 360px-wide PNG, for thumbnails. */
+async function thumbPng(page: HTMLCanvasElement): Promise<Uint8Array | null> {
   const thumb = document.createElement("canvas");
   thumb.width = 360;
   thumb.height = Math.round((page.height / page.width) * 360);
   thumb.getContext("2d")!.drawImage(page, 0, 0, thumb.width, thumb.height);
   const blob = await new Promise<Blob | null>((r) => thumb.toBlob(r, "image/png"));
-  if (!blob) return;
-  await invoke("save_preview", new Uint8Array(await blob.arrayBuffer()), {
+  return blob ? new Uint8Array(await blob.arrayBuffer()) : null;
+}
+
+/** Renders only page 1 of a PDF (for thumbnails; the preview pane uses `renderPdf`). */
+async function firstPageCanvas(data: Uint8Array): Promise<HTMLCanvasElement> {
+  const pdf = await pdfjs.getDocument({ data }).promise;
+  const page = await pdf.getPage(1);
+  const viewport = page.getViewport({ scale: 2 });
+  const canvas = document.createElement("canvas");
+  canvas.width = viewport.width;
+  canvas.height = viewport.height;
+  await page.render({ canvas, viewport }).promise;
+  return canvas;
+}
+
+/** Stores a small PNG of page 1 for the document picker. Best effort. */
+async function savePreview(path: string, page: HTMLCanvasElement) {
+  const png = await thumbPng(page);
+  if (!png) return;
+  await invoke("save_preview", png, {
     headers: { "x-user": user, "x-path": encodeURIComponent(path) },
   }).then(syncSoon, () => {});
+}
+
+/** Same for a template (local only; thumbnails are rebuilt on each device). Best effort. */
+async function saveTemplateThumb(name: string, page: HTMLCanvasElement) {
+  const png = await thumbPng(page);
+  if (!png) return;
+  await invoke("save_template_preview", png, {
+    headers: { "x-user": user, "x-name": encodeURIComponent(name) },
+  }).catch(() => {});
 }
 
 $("compile").addEventListener("click", () => void compile());
@@ -766,7 +794,7 @@ async function renderPicker() {
     return b;
   };
   crumbs.replaceChildren(
-    crumb("Documents", ""),
+    crumb("All documents", ""),
     ...parts.flatMap((part, i) => [" / ", crumb(part, parts.slice(0, i + 1).join("/"))]),
   );
 
@@ -807,7 +835,7 @@ async function renderPicker() {
     cards.push(card);
   }
   for (const d of docs.filter((d) => parentOf(d.path) === pickerFolder)) {
-    const card = makeCard("doc" + (d.path === docPath ? " current" : ""), d.path, "document", async () => {
+    const card = makeCard("doc" + (templateName === null && !snippetsOpen && d.path === docPath ? " current" : ""), d.path, "document", async () => {
       $<HTMLDialogElement>("picker").close();
       await openDocument(d.path);
     });
@@ -843,16 +871,50 @@ async function renderPicker() {
   if (!cards.length) $("doc-grid").textContent = "Nothing here yet.";
 }
 
-$("doc-button").addEventListener("click", async () => {
+// The picker has two tabs, Documents and Templates; it opens on whichever kind you are editing now.
+type PickerTab = "documents" | "templates";
+let pickerTab: PickerTab = "documents";
+
+async function setPickerTab(tab: PickerTab) {
+  pickerTab = tab;
+  const docs = tab === "documents";
+  for (const t of ["documents", "templates"] as const) $(`tab-${t}`).setAttribute("aria-selected", String(t === tab));
+  $("doc-grid").hidden = !docs;
+  $("tpl-grid").hidden = docs;
+  $("docs-subbar").hidden = !docs;
+  $("new-folder").hidden = !docs;
+  $("new-document").hidden = !docs;
+  if (docs) await renderPicker();
+  else await renderTemplates();
+}
+
+/** Re-renders whatever the picker is showing (after a sync, a deletion, ...). */
+const refreshPicker = () => (pickerTab === "documents" ? renderPicker() : renderTemplates());
+
+async function openPicker(tab: PickerTab) {
   await flushSave(); // so snippets and dirty flags are current
   pickerFolder = parentOf(docPath);
-  await renderPicker();
+  await setPickerTab(tab);
   $<HTMLDialogElement>("picker").showModal();
+}
+
+$("doc-button").addEventListener("click", () => void openPicker(templateName !== null ? "templates" : "documents"));
+$("manage-templates").addEventListener("click", () => void openPicker("templates"));
+$("tab-documents").addEventListener("click", () => void setPickerTab("documents"));
+$("tab-templates").addEventListener("click", () => void setPickerTab("templates"));
+// Arrow keys switch tabs when one has focus.
+$("picker").querySelector('[role="tablist"]')!.addEventListener("keydown", (e) => {
+  const k = (e as KeyboardEvent).key;
+  if (k !== "ArrowLeft" && k !== "ArrowRight") return;
+  e.preventDefault();
+  const next: PickerTab = pickerTab === "documents" ? "templates" : "documents";
+  void setPickerTab(next).then(() => $(`tab-${next}`).focus());
 });
 $("picker-up").addEventListener("click", pickerUp);
 // File-manager habits: Alt+Up or Backspace (when not typing in a field) goes up a folder.
 $("picker").addEventListener("keydown", (e) => {
   const typing = (e.target as HTMLElement).closest("input, textarea, select") !== null;
+  if (pickerTab !== "documents") return;
   if ((e.altKey && e.key === "ArrowUp") || (e.key === "Backspace" && !typing && !e.ctrlKey && !e.metaKey && !e.altKey)) {
     if (!pickerFolder) return;
     e.preventDefault();
@@ -1094,23 +1156,69 @@ $("tpl-form").addEventListener("submit", async (e) => {
 });
 
 // -- template manager (from the main menu): open to edit, or delete --
+const DOC_ICON =
+  '<svg class="placeholder" viewBox="0 0 16 16" aria-hidden="true"><path d="M4 1.8h5l3.2 3.2v8.2a1 1 0 0 1-1 1H4a1 1 0 0 1-1-1V2.8a1 1 0 0 1 1-1zM9 1.8V5h3.2" fill="none" stroke="currentColor" stroke-width="1.1" stroke-linejoin="round"/></svg>';
+
+let templateUrls: string[] = [];
+let thumbRun = 0; // bumped on every render, so an older background run stops when the grid is rebuilt or closed
+
+/** Shows the saved thumbnail in `thumb`. Returns false if there isn't one. */
+async function showTemplateThumb(name: string, thumb: HTMLElement): Promise<boolean> {
+  try {
+    const buf = await invoke<ArrayBuffer>("read_template_preview", { user, name });
+    const url = URL.createObjectURL(new Blob([buf], { type: "image/png" }));
+    templateUrls.push(url);
+    const img = document.createElement("img");
+    img.src = url;
+    thumb.replaceChildren(img);
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+/** Builds thumbnails for templates that have none, one at a time, in the background while the dialog is open. */
+async function buildMissingThumbs(missing: { name: string; thumb: HTMLElement }[], run: number) {
+  for (const m of missing) {
+    if (run !== thumbRun || !$<HTMLDialogElement>("picker").open || pickerTab !== "templates") return;
+    m.thumb.classList.add("loading");
+    try {
+      const pdf = new Uint8Array(await invoke<ArrayBuffer>("compile_template_preview", { user, name: m.name }));
+      const png = await thumbPng(await firstPageCanvas(pdf));
+      if (png) {
+        await invoke("save_template_preview", png, { headers: { "x-user": user, "x-name": encodeURIComponent(m.name) } });
+        await showTemplateThumb(m.name, m.thumb);
+      }
+    } catch (e) {
+      console.warn("template thumbnail failed", m.name, e);
+      m.thumb.title = "A preview could not be rendered for this template";
+    } finally {
+      m.thumb.classList.remove("loading");
+    }
+  }
+}
+
 async function renderTemplates() {
-  const templates = await invoke<(TemplateInfo & { snippet: string; dirty: boolean })[]>("list_templates", { user });
+  templateUrls.forEach((u) => URL.revokeObjectURL(u));
+  templateUrls = [];
+  const run = ++thumbRun;
+  const templates = await invoke<TemplateInfo[]>("list_templates", { user });
+  const missing: { name: string; thumb: HTMLElement }[] = [];
   const cards = templates.map((t) => {
     const card = document.createElement("div");
     card.className = "card doc" + (templateName === t.path ? " current" : "");
     card.tabIndex = 0;
     const open = async () => {
-      $<HTMLDialogElement>("tpl-manager").close();
+      $<HTMLDialogElement>("picker").close();
       await openTemplate(t.path);
     };
     card.onclick = open;
     card.onkeydown = (e) => { if (e.key === "Enter") void open(); };
     const thumb = document.createElement("div");
     thumb.className = "thumb";
-    const pre = document.createElement("pre");
-    pre.textContent = t.snippet || "(empty)";
-    thumb.append(pre);
+    thumb.innerHTML = DOC_ICON; // until the real thumbnail is there
+    if (t.has_preview) void showTemplateThumb(t.path, thumb).then((ok) => { if (!ok) missing.push({ name: t.path, thumb }); });
+    else missing.push({ name: t.path, thumb });
     const title = document.createElement("div");
     title.className = "title";
     title.textContent = t.path;
@@ -1119,21 +1227,17 @@ async function renderTemplates() {
     meta.textContent = t.builtin ? "Built-in" : t.dirty ? "Waiting to upload" : "";
     card.append(
       thumb, title, meta,
-      kebab($("tpl-manager"), [
+      kebab($("picker"), [
         { label: "Delete", danger: true, disabled: t.builtin, run: () => askDelete(t.path, "template") },
       ]),
     );
     return card;
   });
   $("tpl-grid").replaceChildren(...cards);
+  // Starts once the dialog is open (the loop checks), after any saved thumbnails had a moment to load.
+  setTimeout(() => void buildMissingThumbs(missing, run), 300);
 }
 
-$("manage-templates").addEventListener("click", async () => {
-  await flushSave();
-  await renderTemplates();
-  $<HTMLDialogElement>("tpl-manager").showModal();
-});
-$("tpl-manager-close").addEventListener("click", () => $<HTMLDialogElement>("tpl-manager").close());
 
 // ---- sync ----
 let syncTimer: number | undefined;
@@ -1186,7 +1290,7 @@ async function runPass() {
     if (templateName === null && !snippetsOpen && res.pulled.includes(docPath)) setDoc(await invoke<string>("load_source", { user, path: docPath }));
     // The open document was deleted on another device (and had no local edits to keep it alive).
     if (templateName === null && !snippetsOpen && docPath && res.removed.some((p) => remap(docPath, p, "\0") !== docPath)) await openAnyDocument();
-    if ($<HTMLDialogElement>("picker").open) void renderPicker();
+    if ($<HTMLDialogElement>("picker").open) void refreshPicker();
     if (res.errors.length) console.warn("sync errors", res.errors);
     if (res.conflicts.length) status(`Conflict: server version kept as "${res.conflicts.join('", "')}"`);
     syncUi.done({ errors: res.errors, conflicts: res.conflicts });

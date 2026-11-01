@@ -30,7 +30,7 @@
             <button role="menuitem" id="export-pdf"><span>Export PDF…</span></button>
             <hr role="separator" />
             <button role="menuitem" id="open-snippets"><span>Snippets…</span></button>
-            <button role="menuitem" id="manage-templates"><span>Manage templates…</span></button>
+            <button role="menuitem" id="manage-templates"><span>Templates…</span></button>
             <hr role="separator" />
             <button role="menuitem" id="open-shortcuts"><span>Keyboard shortcuts…</span></button>
             <button role="menuitem" id="open-settings"><span>Settings…</span><kbd data-key="Mod-,"></kbd></button>
@@ -202,25 +202,23 @@
 
     <dialog id="picker">
       <div class="dlg-head">
-        <button id="picker-up" class="icon-btn" hidden aria-label="Up to the parent folder" title="Up to the parent folder (Alt+↑ or Backspace)">
-          <svg viewBox="0 0 16 16" width="16" height="16" aria-hidden="true"><path d="M13 8H3.5M7.5 3.5L3 8l4.5 4.5" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"/></svg>
-        </button>
-        <div id="crumbs"></div>
+        <div class="tabs" role="tablist" aria-label="Browse">
+          <button type="button" role="tab" id="tab-documents" aria-selected="true">Documents</button>
+          <button type="button" role="tab" id="tab-templates" aria-selected="false">Templates</button>
+        </div>
         <span class="spacer"></span>
         <button id="new-folder">New folder…</button>
         <button id="new-document">New document…</button>
         <button id="picker-close" class="icon-btn" aria-label="Close" title="Close (Esc)"><svg viewBox="0 0 16 16" width="14" height="14" aria-hidden="true"><path d="M3.5 3.5l9 9M12.5 3.5l-9 9" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round"/></svg></button>
       </div>
-      <div id="doc-grid" class="grid"></div>
-    </dialog>
-
-    <dialog id="tpl-manager">
-      <div class="dlg-head">
-        <strong>Templates</strong>
-        <span class="spacer"></span>
-        <button id="tpl-manager-close" class="icon-btn" aria-label="Close" title="Close (Esc)"><svg viewBox="0 0 16 16" width="14" height="14" aria-hidden="true"><path d="M3.5 3.5l9 9M12.5 3.5l-9 9" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round"/></svg></button>
+      <div id="docs-subbar" class="subbar">
+        <button id="picker-up" class="icon-btn" hidden aria-label="Up to the parent folder" title="Up to the parent folder (Alt+↑ or Backspace)">
+          <svg viewBox="0 0 16 16" width="16" height="16" aria-hidden="true"><path d="M13 8H3.5M7.5 3.5L3 8l4.5 4.5" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"/></svg>
+        </button>
+        <div id="crumbs"></div>
       </div>
-      <div id="tpl-grid" class="grid"></div>
+      <div id="doc-grid" class="grid"></div>
+      <div id="tpl-grid" class="grid" hidden></div>
     </dialog>
 
     <dialog id="folder-dialog">

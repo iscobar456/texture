@@ -75,7 +75,11 @@ struct TemplateInfo {
     dirty: bool,
     remote_at: Option<String>,
     builtin: bool,
-    snippet: String,
+    /// A rendered thumbnail of the template's first page exists on this device.
+    has_preview: bool,
+    /// Marker of the synced thumbnail this one matches, and whether a freshly rendered one awaits upload.
+    preview_at: Option<String>,
+    preview_dirty: bool,
 }
 
 /// Names become folder/file names, so only allow a plain, visible name.
@@ -343,6 +347,94 @@ fn create_folder(app: tauri::AppHandle, user: String, path: String) -> Result<()
     fs::create_dir_all(dir).map_err(|e| e.to_string())
 }
 
+/// Thumbnails are derived from the template text, so they are local only and never synced.
+fn template_preview_path(app: &tauri::AppHandle, user: &str, name: &str) -> Result<PathBuf, String> {
+    Ok(templates_dir(app, user)?.join(format!("{}.preview.png", valid_name(name)?)))
+}
+
+/// The template changed (or went away): its old thumbnail is wrong.
+/// The marker is kept on purpose: it says "the server's image is the one I already have (and now know is stale)",
+/// so sync does not download it again; a freshly rendered thumbnail then replaces it.
+fn drop_template_preview(app: &tauri::AppHandle, user: &str, name: &str) {
+    if let Ok(p) = template_preview_path(app, user, name) {
+        let _ = fs::remove_file(p);
+    }
+    if let Ok((_, meta_path)) = template_paths(app, user, name) {
+        if meta_path.exists() {
+            let _ = update_meta(&meta_path, |m| m.preview_dirty = false);
+        }
+    }
+}
+
+/// Raw body is a PNG of the template's first page; headers x-user and x-name (percent-encoded).
+#[tauri::command]
+fn save_template_preview(app: tauri::AppHandle, request: Request<'_>) -> Result<(), String> {
+    let (user, name) = (header(&request, "x-user")?, decode(&header(&request, "x-name")?));
+    let InvokeBody::Raw(bytes) = request.body() else {
+        return Err("expected raw body".into());
+    };
+    let (file, _) = template_paths(&app, &user, &name)?;
+    if !file.is_file() && builtin(&name).is_none() {
+        return Err(format!("no template {name:?}"));
+    }
+    let preview = template_preview_path(&app, &user, &name)?;
+    if fs::read(&preview).map(|old| old == *bytes).unwrap_or(false) {
+        return Ok(());
+    }
+    write_atomic(preview, bytes)?;
+    // Only a template the user owns has a server row to attach the thumbnail to; built-ins stay local.
+    if file.is_file() {
+        let (_, meta_path) = template_paths(&app, &user, &name)?;
+        update_meta(&meta_path, |m| m.preview_dirty = true)?;
+    }
+    Ok(())
+}
+
+/// A thumbnail downloaded from the server (header x-preview-at is its marker).
+#[tauri::command]
+fn apply_template_preview(app: tauri::AppHandle, request: Request<'_>) -> Result<(), String> {
+    let (user, name, at) = (
+        header(&request, "x-user")?,
+        decode(&header(&request, "x-name")?),
+        header(&request, "x-preview-at")?,
+    );
+    let InvokeBody::Raw(bytes) = request.body() else {
+        return Err("expected raw body".into());
+    };
+    let (file, meta_path) = template_paths(&app, &user, &name)?;
+    if !file.is_file() {
+        return Err(format!("no template {name:?}"));
+    }
+    write_atomic(template_preview_path(&app, &user, &name)?, bytes)?;
+    update_meta(&meta_path, |m| {
+        m.preview_at = Some(at);
+        m.preview_dirty = false;
+    })
+}
+
+/// Records that the local thumbnail was uploaded under marker `preview_at`.
+#[tauri::command]
+fn mark_template_preview(app: tauri::AppHandle, user: String, name: String, preview_at: String) -> Result<(), String> {
+    let (_, meta_path) = template_paths(&app, &user, &name)?;
+    update_meta(&meta_path, |m| {
+        m.preview_at = Some(preview_at);
+        m.preview_dirty = false;
+    })
+}
+
+#[tauri::command]
+fn read_template_preview(app: tauri::AppHandle, user: String, name: String) -> Result<Response, String> {
+    let bytes = fs::read(template_preview_path(&app, &user, &name)?).map_err(|e| e.to_string())?;
+    Ok(Response::new(bytes))
+}
+
+/// Compiles a stored template in its own scratch folder (so it never collides with the editor's) and returns the PDF.
+#[tauri::command]
+fn compile_template_preview(app: tauri::AppHandle, user: String, name: String) -> Result<Response, String> {
+    let source = read_template(app.clone(), user.clone(), name)?;
+    build_pdf(&app, &user, "", &source, Some(".scratch-thumbs")).map(Response::new)
+}
+
 /// Built-ins first, then user templates. A user template with a built-in's name replaces it.
 #[tauri::command]
 fn list_templates(app: tauri::AppHandle, user: String) -> Result<Vec<TemplateInfo>, String> {
@@ -353,18 +445,29 @@ fn list_templates(app: tauri::AppHandle, user: String) -> Result<Vec<TemplateInf
             let file = e.file_name().to_string_lossy().to_string();
             let path = file.strip_suffix(".tex")?.to_string();
             let meta = read_meta(&e.path().with_extension("sync.json"));
-            let snippet = snippet(&fs::read_to_string(e.path()).unwrap_or_default());
-            Some(TemplateInfo { path, dirty: meta.dirty, remote_at: meta.remote_at, builtin: false, snippet })
+            let has_preview = e.path().with_file_name(format!("{path}.preview.png")).is_file();
+            Some(TemplateInfo {
+                path,
+                dirty: meta.dirty,
+                remote_at: meta.remote_at,
+                builtin: false,
+                has_preview,
+                preview_at: meta.preview_at,
+                preview_dirty: meta.preview_dirty,
+            })
         })
         .collect();
-    for (name, body) in BUILTIN_TEMPLATES {
+    let dir = templates_dir(&app, &user)?;
+    for (name, _) in BUILTIN_TEMPLATES {
         if !out.iter().any(|d| d.path == name) {
             out.push(TemplateInfo {
                 path: name.into(),
                 dirty: false,
                 remote_at: None,
                 builtin: true,
-                snippet: snippet(body),
+                has_preview: dir.join(format!("{name}.preview.png")).is_file(),
+                preview_at: None,
+                preview_dirty: false,
             });
         }
     }
@@ -413,6 +516,7 @@ fn save_template(
         return Err("exists".into());
     }
     write_atomic(path, source).map_err(|e| e.to_string())?;
+    drop_template_preview(&app, &user, &name);
     update_meta(&meta_path, |m| m.dirty = true)
 }
 
@@ -466,6 +570,7 @@ fn apply_remote(
         "template" => {
             let (file, meta_path) = template_paths(&app, &user, &path)?;
             write_atomic(file, source).map_err(|e| e.to_string())?;
+            drop_template_preview(&app, &user, &path);
             update_meta(&meta_path, set)
         }
         "config" => {
@@ -721,10 +826,11 @@ fn delete_template(app: tauri::AppHandle, user: String, name: String) -> Result<
         return Err(format!("{name:?} is a built-in template and cannot be deleted"));
     }
     if let Some(remote_at) = read_meta(&meta_path).remote_at {
-        add_tombstones(&app, &user, vec![Tombstone { kind: "template".into(), path: name, remote_at }])?;
+        add_tombstones(&app, &user, vec![Tombstone { kind: "template".into(), path: name.clone(), remote_at }])?;
     }
     fs::remove_file(file).map_err(|e| e.to_string())?;
     let _ = fs::remove_file(meta_path);
+    drop_template_preview(&app, &user, &name);
     Ok(())
 }
 
@@ -919,11 +1025,11 @@ fn build_pdf(
     user: &str,
     path: &str,
     source: &str,
-    scratch: bool,
+    scratch: Option<&str>,
 ) -> Result<Vec<u8>, String> {
     // Templates have no folder of their own, so they compile in a throwaway directory.
-    let dir = if scratch {
-        let d = user_dir(app, user)?.join(".scratch");
+    let dir = if let Some(name) = scratch {
+        let d = user_dir(app, user)?.join(name);
         fs::create_dir_all(&d).map_err(|e| e.to_string())?;
         d
     } else {
@@ -948,7 +1054,7 @@ fn compile(
     source: String,
     scratch: bool,
 ) -> Result<Response, String> {
-    build_pdf(&app, &user, &path, &source, scratch).map(Response::new)
+    build_pdf(&app, &user, &path, &source, scratch.then_some(".scratch")).map(Response::new)
 }
 
 /// Compiles and writes the PDF to `dest`, a location the user picked. This is the only way a PDF leaves the app.
@@ -961,7 +1067,7 @@ fn export_pdf(
     scratch: bool,
     dest: String,
 ) -> Result<(), String> {
-    let pdf = build_pdf(&app, &user, &path, &source, scratch)?;
+    let pdf = build_pdf(&app, &user, &path, &source, scratch.then_some(".scratch"))?;
     write_atomic(dest, pdf)
 }
 
@@ -996,6 +1102,11 @@ pub fn run() {
             list_folders,
             create_folder,
             list_templates,
+            save_template_preview,
+            apply_template_preview,
+            mark_template_preview,
+            read_template_preview,
+            compile_template_preview,
             read_template,
             create_document,
             save_template,

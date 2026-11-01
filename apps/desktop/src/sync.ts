@@ -54,6 +54,7 @@ async function syncDeletions(api: Api, user: string) {
   for (const t of await invoke<Tombstone[]>("list_deletions", { user })) {
     const done = await api.deleteDoc(t.kind, t.path, t.remote_at);
     if (done && t.kind === "document") await api.removeDocFiles(t.path).catch(() => {});
+    if (done && t.kind === "template") await api.removePreview("template", t.path).catch(() => {});
     await invoke("clear_deletion", { user, kind: t.kind, path: t.path });
   }
 }
@@ -144,26 +145,39 @@ async function syncKind(api: Api, user: string, kind: DocKind, out: SyncResult) 
   }
 }
 
+/** The commands and argument names that differ between document and template thumbnails. */
+const PREVIEW = {
+  document: { list: "list_documents", read: "read_preview", apply: "apply_preview", mark: "mark_preview", arg: "path", header: "x-path" },
+  template: { list: "list_templates", read: "read_template_preview", apply: "apply_template_preview", mark: "mark_template_preview", arg: "name", header: "x-name" },
+} as const;
+
 /** Uploads previews rendered here and downloads ones rendered on other devices. Best effort. */
-async function syncPreviews(api: Api, user: string) {
-  const remote = new Map((await api.listDocs("document")).map((d) => [d.path, d]));
-  for (const l of await invoke<LocalDoc[]>("list_documents", { user })) {
+async function syncPreviewKind(api: Api, user: string, kind: "document" | "template") {
+  const c = PREVIEW[kind];
+  const remote = new Map((await api.listDocs(kind)).map((d) => [d.path, d]));
+  for (const l of await invoke<LocalDoc[]>(c.list, { user })) {
+    if (l.builtin) continue; // built-in templates have no server row; their thumbnails are always local
     const r = remote.get(l.path);
     if (!r || r.deleted_at) continue; // not on the server yet; retried after it is pushed
     if (l.preview_dirty && l.has_preview) {
-      const bytes = new Uint8Array(await invoke<ArrayBuffer>("read_preview", { user, path: l.path }));
-      await api.uploadPreview(l.path, bytes);
+      const bytes = new Uint8Array(await invoke<ArrayBuffer>(c.read, { user, [c.arg]: l.path }));
+      await api.uploadPreview(kind, l.path, bytes);
       const marker = crypto.randomUUID();
-      if (await api.setPreviewAt(l.path, marker)) await invoke("mark_preview", { user, path: l.path, previewAt: marker });
+      if (await api.setPreviewAt(kind, l.path, marker)) await invoke(c.mark, { user, [c.arg]: l.path, previewAt: marker });
     } else if (r.preview_at && r.preview_at !== l.preview_at) {
-      const bytes = await api.downloadPreview(l.path);
+      const bytes = await api.downloadPreview(kind, l.path);
       if (bytes) {
-        await invoke("apply_preview", bytes, {
-          headers: { "x-user": user, "x-path": encodeURIComponent(l.path), "x-preview-at": r.preview_at },
+        await invoke(c.apply, bytes, {
+          headers: { "x-user": user, [c.header]: encodeURIComponent(l.path), "x-preview-at": r.preview_at },
         });
       }
     }
   }
+}
+
+async function syncPreviews(api: Api, user: string) {
+  await syncPreviewKind(api, user, "document");
+  await syncPreviewKind(api, user, "template");
 }
 
 async function syncImages(api: Api, user: string, path: string) {

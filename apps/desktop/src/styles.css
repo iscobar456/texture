@@ -94,8 +94,8 @@ html:root[data-editor-theme="one-dark"] {
 .settings .row { justify-content: space-between; }
 
 /* document picker */
-#picker, #tpl-manager { width: min(920px, 92vw); height: min(640px, 86vh); }
-#picker[open], #tpl-manager[open] { display: flex; flex-direction: column; }
+#picker { width: min(920px, 92vw); height: min(640px, 86vh); }
+#picker[open] { display: flex; flex-direction: column; }
 .dlg-head { display: flex; align-items: center; gap: 8px; padding: 10px 12px; border-bottom: 1px solid #8884; }
 .crumb { background: none; border: none; padding: 2px 4px; cursor: pointer; font: inherit; color: inherit; }
 .crumb:hover { text-decoration: underline; }
@@ -311,3 +311,20 @@ dialog .row button[value="ok"], dialog .row button.primary, #login button {
 #login { padding: 24px; border: 1px solid var(--border); border-radius: 10px; background: var(--surface); box-shadow: 0 16px 48px rgba(0,0,0,.3); }
 
 #picker-up[hidden] { display: none; }
+
+/* template thumbnails: placeholder until the page is rendered */
+.card .thumb svg.placeholder { width: 44px; height: 44px; opacity: .3; }
+.card .thumb { position: relative; }
+.card .thumb.loading::after { content: ""; position: absolute; right: 8px; bottom: 8px; width: 12px; height: 12px; border-radius: 50%;
+  border: 2px solid #8886; border-top-color: var(--cm-keyword); animation: spin .8s linear infinite; }
+
+/* picker tabs and the folder bar under them */
+.tabs { display: flex; gap: 2px; align-items: flex-end; align-self: stretch; }
+.tabs button { height: auto; padding: 0 14px; border: none; border-bottom: 2px solid transparent; border-radius: 6px 6px 0 0; background: none;
+  color: inherit; font-weight: 600; opacity: .6; cursor: pointer; }
+.tabs button:hover { opacity: 1; background: var(--hover); }
+.tabs button[aria-selected="true"] { opacity: 1; border-bottom-color: var(--cm-keyword); }
+.tabs button:focus-visible { outline: 2px solid var(--cm-keyword); outline-offset: -2px; }
+.subbar { display: flex; align-items: center; gap: 6px; padding: 4px 10px; min-height: 38px; border-bottom: 1px solid var(--border); flex: none; }
+.subbar[hidden], .grid[hidden] { display: none; }
+#new-folder[hidden], #new-document[hidden] { display: none; }
