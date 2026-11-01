@@ -164,6 +164,14 @@ html:root[data-editor-theme="one-dark"] {
 #menu-list kbd { border: none; background: none; padding: 0; opacity: .55; font-size: .9em; }
 #menu-list hr { margin: 4px 6px; border: none; border-top: 1px solid var(--border); }
 
+/* about dialog */
+#about-dialog { width: min(440px, 94vw); }
+#about-body { padding: 4px 20px 20px; }
+#about-body h2 { margin: 8px 0 0; font-size: 1.6em; }
+#about-body ul { margin: 0 0 12px; padding-left: 1.2em; }
+#about-body li { margin-bottom: 6px; }
+#about-body p { margin: 8px 0; }
+
 /* shortcuts dialog */
 #shortcuts-dialog { width: min(720px, 94vw); height: min(620px, 88vh); }
 #shortcuts-dialog[open] { display: flex; flex-direction: column; }
@@ -196,16 +204,23 @@ kbd { display: inline-block; padding: 0 6px; border: 1px solid #8886; border-bot
 /* pane layout */
 .splitter { overflow: visible; border-right: none; cursor: col-resize; position: relative; background: #8883; transition: background .1s; }
 .splitter:hover, .splitter:focus-visible, .splitter.dragging { background: var(--cm-keyword); outline: none; }
-.inbox-toggle { display: flex; align-items: center; gap: 8px; width: 100%; padding: 4px 6px; margin-bottom: 8px; border: none;
-  background: none; font: inherit; font-weight: 600; color: inherit; cursor: pointer; border-radius: 4px; }
-.inbox-toggle:hover { background: #8882; }
-.inbox-toggle .label { flex: 1; text-align: left; }
+.inbox-toggle { position: relative; display: flex; align-items: center; gap: 8px; width: 100%; height: var(--ctl-h); padding: 0 6px; margin-bottom: 8px; border: none;
+  background: none; font: inherit; font-weight: 500; color: inherit; cursor: pointer; border-radius: var(--radius); }
+.inbox-toggle:hover { background: var(--hover); }
+.inbox-toggle:focus-visible { outline: 2px solid var(--cm-keyword); outline-offset: -2px; }
+.inbox-toggle .label { flex: 1; text-align: left; opacity: .85; }
+.inbox-toggle svg { flex: none; opacity: .65; }
+.inbox-toggle:hover svg { opacity: 1; }
+.inbox-toggle .chev { transition: transform .15s; }
+.inbox-toggle[aria-expanded="false"] .chev { display: none; }
 .badge { min-width: 1.4em; padding: 0 6px; border-radius: 999px; background: var(--cm-keyword); color: Canvas; font-size: .8em;
   font-weight: 600; text-align: center; }
 #inbox.collapsed { padding: 8px 4px; overflow: hidden; }
 #inbox.collapsed #inbox-list { display: none; }
-#inbox.collapsed .inbox-toggle { flex-direction: column; height: 100%; margin: 0; padding: 8px 0; align-items: center; justify-content: flex-start; }
-#inbox.collapsed .inbox-toggle .label { flex: 0; writing-mode: vertical-rl; text-align: start; }
+#inbox.collapsed .inbox-toggle { justify-content: center; margin: 0; padding: 0; }
+#inbox.collapsed .inbox-toggle .label { display: none; }
+#inbox.collapsed .inbox-toggle svg { opacity: .85; }
+#inbox.collapsed .badge { position: absolute; top: -2px; right: -2px; min-width: 1.5em; padding: 0 4px; font-size: .7em; line-height: 1.5; }
 
 /* pin each pane to its column, so the grid does not reshuffle when the preview is taken out of flow (full screen) */
 #editor { grid-column: 1; grid-row: 1; }
@@ -359,11 +374,11 @@ dialog .row button[value="ok"], dialog .row button.primary, #set-ocr-save, .dlg-
 .photo-actions > button:last-child { width: var(--ctl-h); padding: 0; }
 .photo-actions > button:hover:not(:disabled) { background: var(--press); }
 .photo-actions > button:disabled { opacity: .5; cursor: default; }
-.photo-actions > button.primary { background: var(--cm-keyword); border-color: transparent; color: Canvas; font-weight: 600; }
-.photo-actions > button.primary:hover:not(:disabled) { background: var(--cm-keyword); filter: brightness(1.12); }
 .photo-actions > button:focus-visible { outline: 2px solid var(--cm-keyword); outline-offset: 1px; }
 .inbox-empty { padding: 20px 6px; text-align: center; }
 .inbox-empty p { margin: 4px 0; }
+.inbox-empty-icon { opacity: .35; margin-bottom: 4px; }
+.inbox-empty-title { font-weight: 500; opacity: .85; }
 #inbox.collapsed .inbox-empty { display: none; }
 
 /* photo viewer */
@@ -399,8 +414,14 @@ dialog .row button[value="ok"], dialog .row button.primary, #set-ocr-save, .dlg-
 .photo-img:disabled { cursor: default; opacity: .75; }
 .photo-actions.two > button { flex: 1; width: auto; padding: 0 10px; }
 .inbox-section { margin: 4px 0 10px; }
-.inbox-section > summary { cursor: pointer; padding: 6px 4px; font-weight: 600; opacity: .8; user-select: none; }
+.inbox-section > summary { display: flex; align-items: center; gap: 6px; list-style: none; cursor: pointer; padding: 6px 4px; font-weight: 500;
+  opacity: .7; user-select: none; border-radius: var(--radius); }
+.inbox-section > summary::-webkit-details-marker { display: none; }
 .inbox-section > summary:hover { opacity: 1; }
+.inbox-section > summary:focus-visible { outline: 2px solid var(--cm-keyword); outline-offset: -2px; }
+.inbox-section > summary .chev { flex: none; opacity: .8; transition: transform .15s; }
+.inbox-section[open] > summary .chev { transform: rotate(90deg); }
+.inbox-section > summary .count { padding: 0 7px; border-radius: 999px; background: var(--hover); font-size: .85em; font-weight: 400; }
 .inbox-section > .photo { margin-top: 6px; }
 
 #toasts { position: fixed; inset: auto 16px 44px auto; margin: 0; padding: 0; border: none; background: none; overflow: visible;

@@ -30,6 +30,7 @@ import { initSnippetsUi } from "./snippets-ui";
 import { initShortcutsUi } from "./shortcuts";
 import { initLayout } from "./layout";
 import { formatDoc } from "./format";
+import { getVersion } from "@tauri-apps/api/app";
 import { initDialogs } from "./dialogs";
 import { kebab, type MenuItem } from "./popup";
 import { initInbox } from "./inbox";
@@ -719,9 +720,11 @@ menuList.addEventListener("click", () => {
 });
 document.addEventListener("click", () => setMenu(false));
 document.addEventListener("keydown", (e) => { if (e.key === "Escape" && !menuList.hidden) setMenu(false); });
-document.querySelectorAll<HTMLButtonElement>("#menu-list .stub").forEach((b) =>
-  b.addEventListener("click", () => status(`${b.dataset.stub}: not implemented yet`)),
-);
+$("open-about").addEventListener("click", async () => {
+  $("about-version").textContent = await getVersion().catch(() => "");
+  $("about-user").textContent = (await api.sb.auth.getSession()).data.session?.user.email ?? "";
+  $<HTMLDialogElement>("about-dialog").showModal();
+});
 
 // ---- documents, folders, templates ----
 const lastKey = () => `hwscan:last:${user}`;

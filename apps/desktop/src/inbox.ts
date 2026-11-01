@@ -242,7 +242,7 @@ export function initInbox(deps: InboxDeps) {
     const newest = all.map((p) => p.created_at).sort().pop();
     const el = document.createElement("div");
     el.className = "inbox-empty";
-    el.innerHTML = '<p><strong>No photos waiting</strong></p><p class="muted">Photos you take in the hwscan phone app appear here.</p>';
+    el.innerHTML = `${EMPTY_ICON}<p class="inbox-empty-title">No photos waiting</p><p class="muted">Photos you take in the Texture phone app appear here.</p>`;
     const last = document.createElement("p");
     last.className = "muted";
     last.textContent = newest ? `Last photo received ${ago(newest)}.` : "Nothing has arrived from your phone yet.";
@@ -250,13 +250,22 @@ export function initInbox(deps: InboxDeps) {
     return el;
   }
 
+  const CHEVRON = '<svg class="chev" viewBox="0 0 16 16" width="14" height="14" aria-hidden="true"><path d="M6 3.5L10.5 8 6 12.5" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/></svg>';
+  const EMPTY_ICON = '<svg class="inbox-empty-icon" viewBox="0 0 16 16" width="28" height="28" aria-hidden="true"><rect x="2" y="2.5" width="12" height="11" rx="2" fill="none" stroke="currentColor" stroke-width="1.4"/><circle cx="5.8" cy="6.2" r="1.1" fill="currentColor"/><path d="M2.6 11.6l3.1-3 2.6 2.4 2-1.8 3.1 2.8" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linecap="round" stroke-linejoin="round"/></svg>';
+
   /** A collapsible group ("Recently used", "Trash") that remembers whether it is open. */
   function section(title: string, count: number, open: boolean, remember: (open: boolean) => void, cards: HTMLElement[]) {
     const d = document.createElement("details");
     d.className = "inbox-section";
     d.open = open;
     const sum = document.createElement("summary");
-    sum.textContent = `${title} (${count})`;
+    sum.innerHTML = CHEVRON;
+    const name = document.createElement("span");
+    name.textContent = title;
+    const pill = document.createElement("span");
+    pill.className = "count";
+    pill.textContent = String(count);
+    sum.append(name, pill);
     d.append(sum, ...cards);
     d.addEventListener("toggle", () => remember(d.open));
     return d;
@@ -294,7 +303,7 @@ export function initInbox(deps: InboxDeps) {
     actions.className = "photo-actions";
     if (kind === "trash") {
       actions.append(
-        button("Restore", "Move it back to the inbox", () => restore(p), "primary"),
+        button("Restore", "Move it back to the inbox", () => restore(p), ""),
         button("Delete forever…", "Permanently delete this photo", async () => deps.askDelete(p), ""),
       );
       actions.classList.add("two");
@@ -308,7 +317,7 @@ export function initInbox(deps: InboxDeps) {
         { label: "Move to trash", danger: true, run: () => void trash(p) },
       ]);
       actions.append(
-        button(kind === "used" ? "Insert again" : "Insert", "Insert the photo into the document at the cursor", async () => insertPhoto(p), "primary"),
+        button(kind === "used" ? "Insert again" : "Insert", "Insert the photo into the document at the cursor", async () => insertPhoto(p), ""),
         button("OCR…", "Transcribe the handwriting to LaTeX and review it first", async () => openOcr(p), ""),
         more,
       );

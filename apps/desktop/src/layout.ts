@@ -38,7 +38,6 @@ export function initLayout() {
   const splitter2 = $("splitter2");
   const inbox = $("inbox");
   const toggle = $<HTMLButtonElement>("inbox-toggle");
-  const chevron = $("inbox-chevron");
   const badge = $("inbox-count");
   let layout = load();
 
@@ -50,7 +49,6 @@ export function initLayout() {
     inbox.classList.toggle("collapsed", layout.inboxCollapsed);
     toggle.setAttribute("aria-expanded", String(!layout.inboxCollapsed));
     toggle.title = layout.inboxCollapsed ? "Show the photo inbox" : "Minimize the photo inbox";
-    chevron.textContent = layout.inboxCollapsed ? "«" : "»";
     splitter.setAttribute("aria-valuenow", String(Math.round(layout.split * 100)));
     splitter2.hidden = layout.inboxCollapsed;
     splitter2.setAttribute("aria-valuenow", String(layout.inboxWidth));

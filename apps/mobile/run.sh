@@ -5,4 +5,6 @@ set -euo pipefail
 cd "$(dirname "$0")"
 [ -f .env ] || { echo "Missing apps/mobile/.env (copy .env.example and fill it in)" >&2; exit 1; }
 command -v flutter >/dev/null || export PATH="$HOME/flutter/bin:$PATH"
+# Silences the Java 25 native-access warning from the Gradle launcher.
+export GRADLE_OPTS="${GRADLE_OPTS:-} --enable-native-access=ALL-UNNAMED"
 exec flutter run --dart-define-from-file=.env "$@"
