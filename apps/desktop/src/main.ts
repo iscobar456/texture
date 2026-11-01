@@ -15,7 +15,7 @@ import { runSync } from "./sync";
 import { EditorState } from "@codemirror/state";
 import { latexSource, loadSnippets, snippetKeymap, userSnippets } from "./completions";
 import { initSnippetsUi } from "./snippets-ui";
-import { DEFAULTS, EDITOR_THEMES, loadSettings, saveSettings, applyAppearance, type Settings } from "./settings";
+import { DEFAULTS, EDITOR_THEMES, OCR_MODELS, loadSettings, saveSettings, applyAppearance, type Settings } from "./settings";
 
 pdfjs.GlobalWorkerOptions.workerSrc = workerUrl;
 
@@ -216,10 +216,12 @@ const field = {
   linenos: $<HTMLInputElement>("set-linenos"),
   auto: $<HTMLInputElement>("set-auto"),
   template: $<HTMLSelectElement>("set-template"),
+  ocrModel: $<HTMLSelectElement>("set-ocr-model"),
 };
 
 function showSettings() {
   field.theme.value = settings.theme;
+  field.ocrModel.value = settings.ocrModel;
   field.editorTheme.value = settings.editorTheme;
   field.editing.value = settings.editing;
   field.font.value = String(settings.fontSize);
@@ -227,6 +229,46 @@ function showSettings() {
   field.linenos.checked = settings.lineNumbers;
   field.auto.checked = settings.autoCompile;
 }
+
+// -- OCR API key (stored by the Rust side; the key itself never comes back to the page) --
+const ocrKey = $<HTMLInputElement>("set-ocr-key");
+const ocrStatus = $("set-ocr-status");
+
+async function refreshKeyStatus() {
+  const has = await invoke<boolean>("has_api_key", { user });
+  ocrStatus.textContent = has ? "A key is saved on this device." : "No key saved.";
+  ocrKey.placeholder = has ? "(saved - paste a new key to replace it)" : "sk-ant-…";
+}
+
+async function keyAction(label: string, fn: () => Promise<void>) {
+  ocrStatus.textContent = `${label}…`;
+  try {
+    await fn();
+  } catch (e) {
+    ocrStatus.textContent = String(e);
+  }
+}
+
+$("set-ocr-save").addEventListener("click", () =>
+  keyAction("Saving", async () => {
+    if (!ocrKey.value.trim()) throw new Error("Paste a key first.");
+    await invoke("set_api_key", { user, key: ocrKey.value });
+    ocrKey.value = "";
+    await refreshKeyStatus();
+  }),
+);
+$("set-ocr-test").addEventListener("click", () =>
+  keyAction("Testing", async () => {
+    await invoke("test_api_key", { user });
+    ocrStatus.textContent = "Key works.";
+  }),
+);
+$("set-ocr-remove").addEventListener("click", () =>
+  keyAction("Removing", async () => {
+    await invoke("set_api_key", { user, key: "" });
+    await refreshKeyStatus();
+  }),
+);
 
 // Changes apply immediately; there is no OK button.
 function readSettings() {
@@ -240,11 +282,13 @@ function readSettings() {
     lineNumbers: field.linenos.checked,
     autoCompile: field.auto.checked,
     defaultTemplate: field.template.value || settings.defaultTemplate,
+    ocrModel: field.ocrModel.value as Settings["ocrModel"],
   };
   saveSettings(settings);
   applySettings();
 }
 
+field.ocrModel.replaceChildren(...OCR_MODELS.map(([value, label]) => new Option(label, value)));
 field.editorTheme.replaceChildren(...EDITOR_THEMES.map(([value, label]) => new Option(label, value)));
 Object.values(field).forEach((el) => el.addEventListener("change", readSettings));
 
@@ -262,6 +306,7 @@ $("open-settings").addEventListener("click", async () => {
   field.template.value = templates.some((t) => t.path === settings.defaultTemplate) ? settings.defaultTemplate : templates[0].path;
   const email = (await api.sb.auth.getSession()).data.session?.user.email;
   $("set-account").textContent = email ? `Signed in as ${email}` : "";
+  void refreshKeyStatus();
   $<HTMLDialogElement>("settings-dialog").showModal();
 });
 
@@ -540,7 +585,17 @@ $("move-form").addEventListener("submit", async (e) => {
 });
 
 let deletePath = "";
-let deleteKind: "document" | "folder" | "template" = "document";
+let deleteKind: "document" | "folder" | "template" | "photo" = "document";
+let deletePhotoTarget: Photo | null = null;
+
+function askDeletePhoto(p: Photo) {
+  deleteKind = "photo";
+  deletePhotoTarget = p;
+  $("delete-what").textContent = "Delete this photo from your inbox? This cannot be undone. A copy in your phone's gallery is not affected.";
+  $("delete-error").textContent = "";
+  $<HTMLDialogElement>("delete-dialog").showModal();
+}
+
 function askDelete(path: string, kind: "document" | "folder" | "template") {
   deletePath = path;
   deleteKind = kind;
@@ -557,6 +612,17 @@ function askDelete(path: string, kind: "document" | "folder" | "template") {
 $("delete-form").addEventListener("submit", async (e) => {
   const submitter = (e as SubmitEvent).submitter as HTMLButtonElement | null;
   if (submitter?.value !== "ok") return;
+  if (deleteKind === "photo") {
+    try {
+      await api.deletePhoto(deletePhotoTarget!);
+    } catch (err) {
+      e.preventDefault();
+      $("delete-error").textContent = String(err);
+      return;
+    }
+    void refreshInbox();
+    return;
+  }
   try {
     await flushSave();
     if (deleteKind === "template") await invoke("delete_template", { user, name: deletePath });
@@ -767,6 +833,26 @@ async function refreshInbox() {
   }
 }
 
+/** Downscales to at most 1568 px on the long side as a JPEG: keeps the request small and the token cost down. */
+async function shrinkToJpeg(blob: Blob, maxSide = 1568): Promise<Uint8Array> {
+  const bitmap = await createImageBitmap(blob); // honours the photo's EXIF rotation
+  const scale = Math.min(1, maxSide / Math.max(bitmap.width, bitmap.height));
+  const canvas = document.createElement("canvas");
+  canvas.width = Math.round(bitmap.width * scale);
+  canvas.height = Math.round(bitmap.height * scale);
+  canvas.getContext("2d")!.drawImage(bitmap, 0, 0, canvas.width, canvas.height);
+  bitmap.close();
+  const out = await new Promise<Blob | null>((res) => canvas.toBlob(res, "image/jpeg", 0.85));
+  if (!out) throw new Error("Could not prepare the photo");
+  return new Uint8Array(await out.arrayBuffer());
+}
+
+function ocrCost(inTok: number, outTok: number): string {
+  const m = OCR_MODELS.find(([v]) => v === settings.ocrModel)!;
+  const dollars = (inTok * m[2] + outTok * m[3]) / 1_000_000;
+  return dollars < 0.01 ? `about ${(dollars * 100).toFixed(2)}¢` : `about $${dollars.toFixed(3)}`;
+}
+
 async function photoCard(p: Photo) {
   const blob = await api.downloadPhoto(p);
   const card = document.createElement("div");
@@ -806,15 +892,27 @@ async function photoCard(p: Photo) {
     }),
     mk("OCR → LaTeX", async () => {
       needDoc();
+      if (!(await invoke<boolean>("has_api_key", { user }))) {
+        throw new Error("Add your Anthropic API key in Menu → Settings → Photo OCR first.");
+      }
       status("Running OCR…");
-      const latex = await api.ocr(p.id);
+      const jpeg = await shrinkToJpeg(blob);
+      const r = await invoke<{ latex: string; input_tokens: number; output_tokens: number; stop_reason: string }>(
+        "ocr_image", jpeg, { headers: { "x-user": user, "x-model": settings.ocrModel } },
+      );
       // Inserted as visible text for review; user edits before compiling.
-      insertAtCursor(`% --- OCR from photo ${p.id}: review before use ---\n${latex}\n`);
+      const cut = r.stop_reason === "max_tokens" ? "% --- OCR output was cut off ---\n" : "";
+      insertAtCursor(`% --- OCR from photo ${p.id}: review before use ---\n${r.latex}\n${cut}`);
       await api.markImported(p.id);
       await refreshInbox();
-      status("OCR inserted");
+      status(`OCR inserted (${r.input_tokens} in / ${r.output_tokens} out, ${ocrCost(r.input_tokens, r.output_tokens)})`);
     }),
   );
+  const del = document.createElement("button");
+  del.textContent = "🗑";
+  del.title = "Delete photo";
+  del.onclick = () => askDeletePhoto(p);
+  row.append(del);
   card.append(img, row);
   return card;
 }
@@ -836,7 +934,7 @@ async function start(userId: string) {
   if (remembered) await openDocument(remembered);
   else await openAnyDocument();
 
-  api.onNewPhoto(() => void refreshInbox());
+  api.onInboxChange(() => void refreshInbox());
 }
 
 async function initAuth() {

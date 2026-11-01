@@ -36,9 +36,6 @@ dependencies:
   cupertino_icons: ^1.0.8
   supabase_flutter: ^2.18.3
   image_picker: ^1.2.4
-  receive_sharing_intent: ^1.9.0
-  image_cropper: ^13.0.0
-
 dev_dependencies:
   flutter_test:
     sdk: flutter

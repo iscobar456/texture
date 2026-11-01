@@ -38,11 +38,6 @@ export function createApi(url: string, anonKey: string) {
       const { error } = await sb.from("photos").update({ status: "imported" }).eq("id", id);
       if (error) throw error;
     },
-    async ocr(photoId: string): Promise<string> {
-      const { data, error } = await sb.functions.invoke("ocr", { body: { photo_id: photoId } });
-      if (error) throw error;
-      return data.latex as string;
-    },
     // ---- synced documents and templates ----
     /** Includes soft-deleted rows: a tombstone is how this device learns of a deletion. */
     async listDocs(kind: DocKind): Promise<RemoteDoc[]> {
@@ -134,10 +129,17 @@ export function createApi(url: string, anonKey: string) {
       if (error) throw error;
       return new Uint8Array(await data.arrayBuffer());
     },
-    onNewPhoto(cb: (p: Photo) => void) {
+    /** Row first, then the file: a leftover file is harmless, a row pointing at nothing is not. */
+    async deletePhoto(p: Photo) {
+      const { error } = await sb.from("photos").delete().eq("id", p.id);
+      if (error) throw error;
+      await sb.storage.from(PHOTO_BUCKET).remove([p.storage_path]).catch(() => {});
+    },
+    /** Fires when photos arrive, are imported or are deleted (here or on another device). */
+    onInboxChange(cb: () => void) {
       return sb
         .channel("photos-inbox")
-        .on("postgres_changes", { event: "INSERT", schema: "public", table: "photos" }, (m) => cb(m.new as Photo))
+        .on("postgres_changes", { event: "*", schema: "public", table: "photos" }, () => cb())
         .subscribe();
     },
   };

@@ -687,6 +687,168 @@ fn remove_local(app: tauri::AppHandle, user: String, kind: String, path: String)
     }
 }
 
+// ---- OCR (handwriting photo -> LaTeX) via the user's own Anthropic API key ----
+
+/// Models offered in Settings. Anything else is rejected, so the key can't be pointed at an arbitrary model.
+const OCR_MODELS: [&str; 3] = ["claude-haiku-5-5", "claude-sonnet-5-5", "claude-opus-5-5"];
+
+const OCR_PROMPT: &str = "Transcribe this handwritten work into LaTeX. Output only the LaTeX body (no preamble, no code fences), \
+using align* for multi-line math. Mark illegible parts with a %UNSURE comment.";
+
+/// Per-account, device-local. Never synced and never sent anywhere except api.anthropic.com.
+fn key_file(app: &tauri::AppHandle, user: &str) -> Result<PathBuf, String> {
+    Ok(user_dir(app, user)?.join(".api_key"))
+}
+
+/// Like `write_atomic`, but the file is owner-only from the moment it exists.
+fn write_secret(path: &std::path::Path, data: &str) -> Result<(), String> {
+    use std::io::Write;
+    let tmp = path.with_file_name(".api_key.tmp");
+    let mut opts = fs::OpenOptions::new();
+    opts.write(true).create(true).truncate(true);
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::OpenOptionsExt;
+        opts.mode(0o600);
+    }
+    let mut f = opts.open(&tmp).map_err(|e| e.to_string())?;
+    f.write_all(data.as_bytes()).map_err(|e| e.to_string())?;
+    f.sync_all().map_err(|e| e.to_string())?;
+    fs::rename(&tmp, path).map_err(|e| e.to_string())
+}
+
+fn read_key(app: &tauri::AppHandle, user: &str) -> Result<String, String> {
+    fs::read_to_string(key_file(app, user)?)
+        .map(|k| k.trim().to_string())
+        .ok()
+        .filter(|k| !k.is_empty())
+        .ok_or_else(|| "No API key set. Add one in Settings → OCR.".to_string())
+}
+
+/// Saves the key, or removes it when `key` is empty. The key is never returned to the frontend.
+#[tauri::command]
+fn set_api_key(app: tauri::AppHandle, user: String, key: String) -> Result<(), String> {
+    let path = key_file(&app, &user)?;
+    let key = key.trim();
+    if key.is_empty() {
+        let _ = fs::remove_file(path);
+        return Ok(());
+    }
+    if key.len() > 300 || !key.is_ascii() || key.contains(char::is_whitespace) {
+        return Err("That doesn't look like an API key.".into());
+    }
+    write_secret(&path, key)
+}
+
+#[tauri::command]
+fn has_api_key(app: tauri::AppHandle, user: String) -> Result<bool, String> {
+    Ok(key_file(&app, &user)?.is_file())
+}
+
+fn http() -> Result<reqwest::Client, String> {
+    reqwest::Client::builder()
+        .timeout(std::time::Duration::from_secs(180))
+        .build()
+        .map_err(|e| e.to_string())
+}
+
+/// Pulls Anthropic's error message out of a failed response.
+async fn api_error(resp: reqwest::Response) -> String {
+    let status = resp.status();
+    let body: serde_json::Value = resp.json().await.unwrap_or_default();
+    let msg = body["error"]["message"].as_str().unwrap_or("request failed");
+    match status.as_u16() {
+        401 => "The API key was rejected (401). Check it in Settings → OCR.".into(),
+        429 => format!("Rate limited or out of credit (429): {msg}"),
+        _ => format!("Anthropic API error ({status}): {msg}"),
+    }
+}
+
+/// Checks the key with a free call (list models), so no tokens are spent.
+#[tauri::command]
+async fn test_api_key(app: tauri::AppHandle, user: String) -> Result<(), String> {
+    let key = read_key(&app, &user)?;
+    let resp = http()?
+        .get("https://api.anthropic.com/v1/models?limit=1")
+        .header("x-api-key", key)
+        .header("anthropic-version", "2023-06-01")
+        .send()
+        .await
+        .map_err(|e| format!("Could not reach Anthropic: {e}"))?;
+    if resp.status().is_success() { Ok(()) } else { Err(api_error(resp).await) }
+}
+
+#[derive(Serialize)]
+struct OcrResult {
+    latex: String,
+    input_tokens: u64,
+    output_tokens: u64,
+    stop_reason: String,
+}
+
+/// Raw body is a JPEG; headers x-user and x-model say whose key and which model.
+#[tauri::command]
+async fn ocr_image(app: tauri::AppHandle, request: Request<'_>) -> Result<OcrResult, String> {
+    use base64::Engine;
+    // Copy everything out of the request first, so nothing borrowed is held across an await.
+    let (user, model) = (header(&request, "x-user")?, header(&request, "x-model")?);
+    let InvokeBody::Raw(bytes) = request.body() else {
+        return Err("expected raw body".into());
+    };
+    let image = base64::engine::general_purpose::STANDARD.encode(bytes);
+    if !OCR_MODELS.contains(&model.as_str()) {
+        return Err(format!("unknown model {model:?}"));
+    }
+    let key = read_key(&app, &user)?;
+
+    let body = serde_json::json!({
+        "model": model,
+        "max_tokens": 8192,
+        // Transcription needs little reasoning; thinking tokens are billed as output.
+        "output_config": { "effort": "low" },
+        "messages": [{
+            "role": "user",
+            "content": [
+                { "type": "image", "source": { "type": "base64", "media_type": "image/jpeg", "data": image } },
+                { "type": "text", "text": OCR_PROMPT }
+            ]
+        }]
+    });
+    let resp = http()?
+        .post("https://api.anthropic.com/v1/messages")
+        .header("x-api-key", key)
+        .header("anthropic-version", "2023-06-01")
+        .json(&body)
+        .send()
+        .await
+        .map_err(|e| format!("Could not reach Anthropic: {e}"))?;
+    if !resp.status().is_success() {
+        return Err(api_error(resp).await);
+    }
+    let j: serde_json::Value = resp.json().await.map_err(|e| e.to_string())?;
+    let stop_reason = j["stop_reason"].as_str().unwrap_or("").to_string();
+    if stop_reason == "refusal" {
+        return Err("The model declined to transcribe this image.".into());
+    }
+    let latex = j["content"]
+        .as_array()
+        .map(|blocks| {
+            blocks
+                .iter()
+                .filter(|b| b["type"] == "text")
+                .filter_map(|b| b["text"].as_str())
+                .collect::<Vec<_>>()
+                .join("")
+        })
+        .unwrap_or_default();
+    Ok(OcrResult {
+        latex: latex.trim().to_string(),
+        input_tokens: j["usage"]["input_tokens"].as_u64().unwrap_or(0),
+        output_tokens: j["usage"]["output_tokens"].as_u64().unwrap_or(0),
+        stop_reason,
+    })
+}
+
 /// Compile `source` and return the PDF bytes. Prefers tectonic, falls back to pdflatex.
 fn build_pdf(
     app: &tauri::AppHandle,
@@ -788,7 +950,11 @@ pub fn run() {
             move_item,
             remove_local,
             compile,
-            export_pdf
+            export_pdf,
+            set_api_key,
+            has_api_key,
+            test_api_key,
+            ocr_image
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");

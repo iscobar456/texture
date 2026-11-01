@@ -114,6 +114,25 @@
           <label>Template for new documents <select id="set-template"></select></label>
         </fieldset>
         <fieldset>
+          <legend>Photo OCR (handwriting → LaTeX)</legend>
+          <label>Model <select id="set-ocr-model"></select></label>
+          <label>API key
+            <input id="set-ocr-key" type="password" placeholder="sk-ant-…" autocomplete="off" spellcheck="false" />
+          </label>
+          <div class="row">
+            <span id="set-ocr-status" class="muted"></span>
+            <span>
+              <button type="button" id="set-ocr-save">Save key</button>
+              <button type="button" id="set-ocr-test">Test</button>
+              <button type="button" id="set-ocr-remove">Remove</button>
+            </span>
+          </div>
+          <span class="muted">
+            Your own Anthropic API key. It stays on this device and is sent only to Anthropic;
+            usage is billed to your Anthropic account.
+          </span>
+        </fieldset>
+        <fieldset>
           <legend>Account</legend>
           <span id="set-account" class="muted"></span>
         </fieldset>
