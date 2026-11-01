@@ -4,12 +4,14 @@
 import { getCurrentWindow } from "@tauri-apps/api/window";
 
 const KEY = "hwscan:layout";
-const INBOX_WIDTH = "260px";
-const INBOX_COLLAPSED = "44px";
+const INBOX_DEFAULT = 260;
+const INBOX_MIN = 200;
+const INBOX_MAX = 520;
+const INBOX_COLLAPSED = 44;
 const MIN_SPLIT = 0.2;
 const MAX_SPLIT = 0.8;
 
-type Layout = { split: number; inboxCollapsed: boolean };
+type Layout = { split: number; inboxCollapsed: boolean; inboxWidth: number };
 
 const $ = <T extends HTMLElement>(id: string) => document.getElementById(id) as T;
 
@@ -17,12 +19,14 @@ function load(): Layout {
   try {
     const raw = JSON.parse(localStorage.getItem(KEY) ?? "{}");
     const split = Number(raw.split);
+    const width = Number(raw.inboxWidth);
     return {
       split: Number.isFinite(split) ? Math.min(MAX_SPLIT, Math.max(MIN_SPLIT, split)) : 0.5,
       inboxCollapsed: raw.inboxCollapsed === true,
+      inboxWidth: Number.isFinite(width) ? Math.min(INBOX_MAX, Math.max(INBOX_MIN, width)) : INBOX_DEFAULT,
     };
   } catch {
-    return { split: 0.5, inboxCollapsed: false };
+    return { split: 0.5, inboxCollapsed: false, inboxWidth: INBOX_DEFAULT };
   }
 }
 
@@ -31,6 +35,7 @@ export function initLayout() {
   const editor = $("editor");
   const preview = $("preview");
   const splitter = $("splitter");
+  const splitter2 = $("splitter2");
   const inbox = $("inbox");
   const toggle = $<HTMLButtonElement>("inbox-toggle");
   const chevron = $("inbox-chevron");
@@ -39,13 +44,16 @@ export function initLayout() {
 
   function apply() {
     // minmax(0, …) lets either pane shrink below its content instead of overflowing.
-    const cols = `minmax(0, ${layout.split}fr) 6px minmax(0, ${1 - layout.split}fr) ${layout.inboxCollapsed ? INBOX_COLLAPSED : INBOX_WIDTH}`;
+    // The second splitter has no width while the inbox is minimized.
+    const cols = `minmax(0, ${layout.split}fr) 6px minmax(0, ${1 - layout.split}fr) ${layout.inboxCollapsed ? 0 : 6}px ${layout.inboxCollapsed ? INBOX_COLLAPSED : layout.inboxWidth}px`;
     main.style.setProperty("--cols", cols);
     inbox.classList.toggle("collapsed", layout.inboxCollapsed);
     toggle.setAttribute("aria-expanded", String(!layout.inboxCollapsed));
     toggle.title = layout.inboxCollapsed ? "Show the photo inbox" : "Minimize the photo inbox";
     chevron.textContent = layout.inboxCollapsed ? "«" : "»";
     splitter.setAttribute("aria-valuenow", String(Math.round(layout.split * 100)));
+    splitter2.hidden = layout.inboxCollapsed;
+    splitter2.setAttribute("aria-valuenow", String(layout.inboxWidth));
   }
 
   function save() {
@@ -56,28 +64,45 @@ export function initLayout() {
     layout.split = Math.min(MAX_SPLIT, Math.max(MIN_SPLIT, v));
     apply();
   };
+  const setInboxWidth = (v: number) => {
+    layout.inboxWidth = Math.round(Math.min(INBOX_MAX, Math.max(INBOX_MIN, v)));
+    apply();
+  };
 
-  // Drag: the fraction is measured against the width the two panes share, so it survives window resizes.
-  splitter.addEventListener("pointerdown", (e) => {
-    e.preventDefault();
-    splitter.setPointerCapture(e.pointerId);
-    splitter.classList.add("dragging");
-    document.body.style.userSelect = "none";
+  /** Pointer-drags a splitter; `onMove` gets the pointer's x. The layout is saved when the drag ends. */
+  function drag(handle: HTMLElement, start: () => ((x: number) => void)) {
+    handle.addEventListener("pointerdown", (e) => {
+      e.preventDefault();
+      handle.setPointerCapture(e.pointerId);
+      handle.classList.add("dragging");
+      document.body.style.userSelect = "none";
+      const onMove = start();
+      const move = (ev: PointerEvent) => onMove(ev.clientX);
+      const up = () => {
+        handle.releasePointerCapture(e.pointerId);
+        handle.classList.remove("dragging");
+        document.body.style.userSelect = "";
+        handle.removeEventListener("pointermove", move);
+        handle.removeEventListener("pointerup", up);
+        handle.removeEventListener("pointercancel", up);
+        save();
+      };
+      handle.addEventListener("pointermove", move);
+      handle.addEventListener("pointerup", up);
+      handle.addEventListener("pointercancel", up);
+    });
+  }
+
+  // Editor/preview: the fraction is measured against the width the two panes share, so it survives window resizes.
+  drag(splitter, () => {
     const left = editor.getBoundingClientRect().left;
     const shared = editor.getBoundingClientRect().width + preview.getBoundingClientRect().width;
-    const move = (ev: PointerEvent) => setSplit((ev.clientX - left) / shared);
-    const up = () => {
-      splitter.releasePointerCapture(e.pointerId);
-      splitter.classList.remove("dragging");
-      document.body.style.userSelect = "";
-      splitter.removeEventListener("pointermove", move);
-      splitter.removeEventListener("pointerup", up);
-      splitter.removeEventListener("pointercancel", up);
-      save();
-    };
-    splitter.addEventListener("pointermove", move);
-    splitter.addEventListener("pointerup", up);
-    splitter.addEventListener("pointercancel", up);
+    return (x) => setSplit((x - left) / shared);
+  });
+  // Preview/inbox: the inbox is as wide as the distance from the pointer to the window's right edge.
+  drag(splitter2, () => {
+    const right = main.getBoundingClientRect().right;
+    return (x) => setInboxWidth(right - x);
   });
 
   // Keyboard: arrows nudge, Home/End jump to the limits; double-click resets.
@@ -93,6 +118,20 @@ export function initLayout() {
   });
   splitter.addEventListener("dblclick", () => {
     setSplit(0.5);
+    save();
+  });
+  splitter2.addEventListener("keydown", (e) => {
+    const step = e.shiftKey ? 64 : 16;
+    if (e.key === "ArrowLeft") setInboxWidth(layout.inboxWidth + step); // moving the edge left widens the inbox
+    else if (e.key === "ArrowRight") setInboxWidth(layout.inboxWidth - step);
+    else if (e.key === "Home") setInboxWidth(INBOX_MAX);
+    else if (e.key === "End") setInboxWidth(INBOX_MIN);
+    else return;
+    e.preventDefault();
+    save();
+  });
+  splitter2.addEventListener("dblclick", () => {
+    setInboxWidth(INBOX_DEFAULT);
     save();
   });
 

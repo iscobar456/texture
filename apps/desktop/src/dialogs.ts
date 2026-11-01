@@ -18,7 +18,7 @@ export function initDialogs(focusEditor: () => void) {
       if (e.key !== "Escape") return;
       const open = document.querySelectorAll<HTMLDialogElement>("dialog[open]");
       const top = open[open.length - 1];
-      const popup = top?.querySelector(".popup");
+      const popup = (top ?? document).querySelector(".popup");
       if (popup) {
         popup.remove();
         e.preventDefault();

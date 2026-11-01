@@ -29,7 +29,10 @@ import { toml } from "@codemirror/legacy-modes/mode/toml";
 import { initSnippetsUi } from "./snippets-ui";
 import { initShortcutsUi } from "./shortcuts";
 import { initLayout } from "./layout";
+import { formatDoc } from "./format";
 import { initDialogs } from "./dialogs";
+import { kebab, type MenuItem } from "./popup";
+import { initInbox } from "./inbox";
 import { initSwitcher, splitPath } from "./switcher";
 import { collectPending, initSyncUi, type Pending } from "./sync-ui";
 import { getCurrentWindow } from "@tauri-apps/api/window";
@@ -44,6 +47,15 @@ type FolderInfo = { path: string };
 
 const $ = <T extends HTMLElement>(id: string) => document.getElementById(id) as T;
 const status = (s: string) => ($("status").textContent = s);
+/** A short-lived note over the bottom of the editor, for results of editor actions (e.g. Format). */
+let noteTimer = 0;
+function editorNote(s: string) {
+  const el = $("editor-note");
+  el.textContent = s;
+  el.hidden = false;
+  window.clearTimeout(noteTimer);
+  noteTimer = window.setTimeout(() => (el.hidden = true), 5000);
+}
 
 // ---- session state (set once signed in) ----
 let api: Api;
@@ -110,7 +122,10 @@ function createEditor(doc: string) {
     parent: $("editor"),
     extensions: [
       // Listed before vim() so Ctrl+Enter still wins over its key handling.
-      Prec.highest(keymap.of([{ key: "Mod-Enter", run: () => (void compile(), true) }])),
+      Prec.highest(keymap.of([
+        { key: "Mod-Enter", run: () => (void compile(), true) },
+        { key: "Mod-Shift-f", run: () => (formatDocument(), true), preventDefault: true },
+      ])),
       snippetSlot.of(snippetKeys()), // before vim(), at the same precedence, so it wins
       vimSlot.of(settings.editing === "vim" ? vim() : []),
       basicSetup,
@@ -158,8 +173,21 @@ function applySettings() {
   });
 }
 
+/** Re-indents the LaTeX and tidies whitespace. One undo step; refuses (and says why) if the text does not balance. */
+function formatDocument() {
+  if (!view) return;
+  if (snippetsOpen) return void editorNote("Format is for LaTeX; the snippets file is TOML");
+  const r = formatDoc(view.state.doc);
+  if (!r.ok) return void editorNote(`Can't format: ${r.error}`);
+  if (!r.edits.length) return void editorNote("Already formatted");
+  view.dispatch({ changes: r.edits, userEvent: "format" });
+  editorNote(`Formatted: ${r.changedLines} line${r.changedLines === 1 ? "" : "s"} changed (Ctrl+Z undoes it)`);
+}
+$("format-doc").addEventListener("click", formatDocument);
+
 // :w saves and compiles
 Vim.defineEx("write", "w", () => void compile());
+Vim.defineEx("fmt", "fmt", () => formatDocument());
 
 function insertAtCursor(text: string) {
   const { from, to } = view!.state.selection.main;
@@ -372,6 +400,16 @@ $("export-pdf").addEventListener("click", async () => {
 initShortcutsUi(() => settings.editing === "vim");
 initDialogs(() => view?.focus());
 const layout = initLayout();
+const inbox = initInbox({
+  api: () => api,
+  user: () => user,
+  settings: () => settings,
+  target: () => (templateName !== null || snippetsOpen ? null : docPath),
+  insertAtCursor: (text) => insertAtCursor(text),
+  status,
+  askDelete: (p) => askDeletePhoto(p),
+  onCount: (n) => layout.setInboxCount(n),
+});
 
 // ---- snippets: one user-owned TOML file (see default-snippets.toml) ----
 const snippetsUi = initSnippetsUi({
@@ -476,40 +514,81 @@ function showSettings() {
 // -- OCR API key (stored by the Rust side; the key itself never comes back to the page) --
 const ocrKey = $<HTMLInputElement>("set-ocr-key");
 const ocrStatus = $("set-ocr-status");
+const ocrBadge = $("set-ocr-badge");
+const ocrSave = $<HTMLButtonElement>("set-ocr-save");
+const ocrTest = $<HTMLButtonElement>("set-ocr-test");
+const ocrRemove = $<HTMLButtonElement>("set-ocr-remove");
+const ocrShow = $<HTMLButtonElement>("set-ocr-show");
+let keySaved = false;
+
+function keyNote(text: string, kind: "" | "ok" | "err" = "") {
+  ocrStatus.textContent = text;
+  ocrStatus.className = `muted ${kind}`.trim();
+}
+
+/** Save needs something typed; Test and Remove need a saved key. */
+function syncKeyButtons(busy = false) {
+  ocrSave.disabled = busy || !ocrKey.value.trim();
+  ocrTest.disabled = busy || !keySaved;
+  ocrRemove.disabled = busy || !keySaved;
+}
 
 async function refreshKeyStatus() {
-  const has = await invoke<boolean>("has_api_key", { user });
-  ocrStatus.textContent = has ? "A key is saved on this device." : "No key saved.";
-  ocrKey.placeholder = has ? "(saved - paste a new key to replace it)" : "sk-ant-…";
+  keySaved = await invoke<boolean>("has_api_key", { user });
+  ocrBadge.textContent = keySaved ? "Key saved on this device" : "No key saved";
+  ocrBadge.classList.toggle("saved", keySaved);
+  ocrKey.placeholder = keySaved ? "Paste a new key to replace the saved one" : "sk-ant-…";
+  syncKeyButtons();
 }
 
 async function keyAction(label: string, fn: () => Promise<void>) {
-  ocrStatus.textContent = `${label}…`;
+  keyNote(`${label}…`);
+  syncKeyButtons(true);
   try {
     await fn();
   } catch (e) {
-    ocrStatus.textContent = String(e);
+    keyNote(String(e), "err");
   }
+  syncKeyButtons();
 }
 
-$("set-ocr-save").addEventListener("click", () =>
+ocrKey.addEventListener("input", () => {
+  syncKeyButtons();
+  keyNote("");
+});
+ocrKey.addEventListener("keydown", (e) => {
+  if (e.key === "Enter" && !ocrSave.disabled) {
+    e.preventDefault();
+    ocrSave.click();
+  }
+});
+ocrShow.addEventListener("click", () => {
+  const show = ocrKey.type === "password";
+  ocrKey.type = show ? "text" : "password";
+  ocrShow.textContent = show ? "Hide" : "Show";
+  ocrShow.setAttribute("aria-pressed", String(show));
+});
+
+ocrSave.addEventListener("click", () =>
   keyAction("Saving", async () => {
     if (!ocrKey.value.trim()) throw new Error("Paste a key first.");
     await invoke("set_api_key", { user, key: ocrKey.value });
     ocrKey.value = "";
     await refreshKeyStatus();
+    keyNote("Saved. Use Test key to check it works.", "ok");
   }),
 );
-$("set-ocr-test").addEventListener("click", () =>
+ocrTest.addEventListener("click", () =>
   keyAction("Testing", async () => {
     await invoke("test_api_key", { user });
-    ocrStatus.textContent = "Key works.";
+    keyNote("✓ The key works.", "ok");
   }),
 );
-$("set-ocr-remove").addEventListener("click", () =>
+ocrRemove.addEventListener("click", () =>
   keyAction("Removing", async () => {
     await invoke("set_api_key", { user, key: "" });
     await refreshKeyStatus();
+    keyNote("Key removed.");
   }),
 );
 
@@ -549,6 +628,8 @@ $("open-settings").addEventListener("click", async () => {
   field.template.value = templates.some((t) => t.path === settings.defaultTemplate) ? settings.defaultTemplate : templates[0].path;
   const email = (await api.sb.auth.getSession()).data.session?.user.email;
   $("set-account").textContent = email ? `Signed in as ${email}` : "";
+  ocrKey.value = "";
+  keyNote("");
   void refreshKeyStatus();
   $<HTMLDialogElement>("settings-dialog").showModal();
 });
@@ -684,7 +765,7 @@ async function openDocument(path: string) {
   setDocLabel(splitPath(path).dir, splitPath(path).name, path);
   recordRecent(path);
   markOpenItem(syncUi.getPending());
-  void refreshInbox();
+  void inbox.refresh();
   syncSoon();
   void compile(true); // so the preview is there when you arrive; an error only shows in the status bar
 }
@@ -717,39 +798,6 @@ function dialogOpen(dlg: HTMLDialogElement, input: HTMLInputElement) {
 }
 
 // -- ⋮ menus --
-type MenuItem = { label: string; run: () => void; danger?: boolean; disabled?: boolean };
-
-/** A vertical-dots button that opens a small menu. The menu lives in `host` (a dialog) so it shows above it. */
-function kebab(host: HTMLElement, items: MenuItem[]) {
-  const btn = document.createElement("button");
-  btn.className = "kebab";
-  btn.textContent = "⋮";
-  btn.title = "Actions";
-  btn.setAttribute("aria-haspopup", "menu");
-  btn.onclick = (e) => {
-    e.stopPropagation();
-    const existing = host.querySelector(".popup");
-    existing?.remove();
-    const pop = document.createElement("div");
-    pop.className = "popup";
-    pop.setAttribute("role", "menu");
-    for (const it of items) {
-      const b = document.createElement("button");
-      b.textContent = it.label;
-      b.disabled = !!it.disabled;
-      if (it.danger) b.className = "danger";
-      b.onclick = (ev) => { ev.stopPropagation(); pop.remove(); it.run(); };
-      pop.append(b);
-    }
-    const r = btn.getBoundingClientRect();
-    pop.style.top = `${r.bottom + 2}px`;
-    pop.style.left = `${Math.max(8, r.right - 170)}px`;
-    host.append(pop);
-  };
-  return btn;
-}
-// Clicking anywhere else closes an open ⋮ menu.
-document.addEventListener("click", () => document.querySelectorAll(".popup").forEach((p) => p.remove()));
 
 // -- document picker --
 let pickerFolder = ""; // "" is the top level
@@ -1007,7 +1055,7 @@ let deletePhotoTarget: Photo | null = null;
 function askDeletePhoto(p: Photo) {
   deleteKind = "photo";
   deletePhotoTarget = p;
-  $("delete-what").textContent = "Delete this photo from your inbox? This cannot be undone. A copy in your phone's gallery is not affected.";
+  $("delete-what").textContent = "Delete this photo permanently? It is removed from your account and cannot be restored. A copy in your phone's gallery is not affected.";
   $("delete-error").textContent = "";
   $<HTMLDialogElement>("delete-dialog").showModal();
 }
@@ -1036,7 +1084,7 @@ $("delete-form").addEventListener("submit", async (e) => {
       $("delete-error").textContent = String(err);
       return;
     }
-    void refreshInbox();
+    void inbox.refresh();
     return;
   }
   try {
@@ -1334,102 +1382,6 @@ window.addEventListener("online", () => void doSync());
 setInterval(() => void doSync(), 60_000);
 
 // ---- photo inbox ----
-async function refreshInbox() {
-  const list = $("inbox-list");
-  try {
-    const photos = await api.listPending();
-    list.replaceChildren(...(await Promise.all(photos.map((p) => photoCard(p)))));
-    if (!photos.length) list.textContent = "No pending photos";
-    layout.setInboxCount(photos.length);
-  } catch {
-    list.textContent = "Photo inbox needs a connection";
-  }
-}
-
-/** Downscales to at most 1568 px on the long side as a JPEG: keeps the request small and the token cost down. */
-async function shrinkToJpeg(blob: Blob, maxSide = 1568): Promise<Uint8Array> {
-  const bitmap = await createImageBitmap(blob); // honours the photo's EXIF rotation
-  const scale = Math.min(1, maxSide / Math.max(bitmap.width, bitmap.height));
-  const canvas = document.createElement("canvas");
-  canvas.width = Math.round(bitmap.width * scale);
-  canvas.height = Math.round(bitmap.height * scale);
-  canvas.getContext("2d")!.drawImage(bitmap, 0, 0, canvas.width, canvas.height);
-  bitmap.close();
-  const out = await new Promise<Blob | null>((res) => canvas.toBlob(res, "image/jpeg", 0.85));
-  if (!out) throw new Error("Could not prepare the photo");
-  return new Uint8Array(await out.arrayBuffer());
-}
-
-function ocrCost(inTok: number, outTok: number): string {
-  const m = OCR_MODELS.find(([v]) => v === settings.ocrModel)!;
-  const dollars = (inTok * m[2] + outTok * m[3]) / 1_000_000;
-  return dollars < 0.01 ? `about ${(dollars * 100).toFixed(2)}¢` : `about $${dollars.toFixed(3)}`;
-}
-
-async function photoCard(p: Photo) {
-  const blob = await api.downloadPhoto(p);
-  const card = document.createElement("div");
-  card.className = "photo";
-  const img = document.createElement("img");
-  img.src = URL.createObjectURL(blob);
-  const row = document.createElement("div");
-  row.className = "row";
-
-  const mk = (label: string, fn: () => Promise<void>) => {
-    const b = document.createElement("button");
-    b.textContent = label;
-    b.onclick = async () => {
-      b.disabled = true;
-      try { await fn(); } catch (e) { status(String(e)); b.disabled = false; }
-    };
-    return b;
-  };
-
-  const needDoc = () => {
-    if (templateName !== null || snippetsOpen) throw new Error("Open a document to insert photos");
-  };
-  const saveImage = async () => {
-    needDoc();
-    const ext = p.storage_path.split(".").pop() ?? "jpg";
-    return invoke<string>("save_image", new Uint8Array(await blob.arrayBuffer()), {
-      headers: { "x-user": user, "x-path": encodeURIComponent(docPath), "x-name": `${p.id}.${ext}` },
-    });
-  };
-
-  row.append(
-    mk("Insert image", async () => {
-      const rel = await saveImage();
-      insertAtCursor(`\\begin{center}\n\\includegraphics[width=0.8\\linewidth]{${rel}}\n\\end{center}\n`);
-      await api.markImported(p.id);
-      await refreshInbox();
-    }),
-    mk("OCR → LaTeX", async () => {
-      needDoc();
-      if (!(await invoke<boolean>("has_api_key", { user }))) {
-        throw new Error("Add your Anthropic API key in Menu → Settings → Photo OCR first.");
-      }
-      status("Running OCR…");
-      const jpeg = await shrinkToJpeg(blob);
-      const r = await invoke<{ latex: string; input_tokens: number; output_tokens: number; stop_reason: string }>(
-        "ocr_image", jpeg, { headers: { "x-user": user, "x-model": settings.ocrModel } },
-      );
-      // Inserted as visible text for review; user edits before compiling.
-      const cut = r.stop_reason === "max_tokens" ? "% --- OCR output was cut off ---\n" : "";
-      insertAtCursor(`% --- OCR from photo ${p.id}: review before use ---\n${r.latex}\n${cut}`);
-      await api.markImported(p.id);
-      await refreshInbox();
-      status(`OCR inserted (${r.input_tokens} in / ${r.output_tokens} out, ${ocrCost(r.input_tokens, r.output_tokens)})`);
-    }),
-  );
-  const del = document.createElement("button");
-  del.textContent = "🗑";
-  del.title = "Delete photo";
-  del.onclick = () => askDeletePhoto(p);
-  row.append(del);
-  card.append(img, row);
-  return card;
-}
-
 // ---- auth gate ----
 // Nothing in #app is usable without a signed-in user: documents and templates belong to the account.
 async function start(userId: string) {
@@ -1449,7 +1401,7 @@ async function start(userId: string) {
   if (remembered) await openDocument(remembered);
   else await openAnyDocument();
 
-  api.onInboxChange(() => void refreshInbox());
+  api.onInboxChange(() => void inbox.refresh());
 }
 
 async function initAuth() {

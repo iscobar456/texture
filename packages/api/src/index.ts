@@ -6,9 +6,12 @@ export type Photo = {
   user_id: string;
   assignment_id: string | null;
   storage_path: string;
-  status: "pending" | "imported";
+  status: "pending" | "imported" | "trashed";
   ocr_latex: string | null;
   created_at: string;
+  /** When it was last inserted into a document. */
+  imported_at: string | null;
+  trashed_at: string | null;
 };
 
 export const PHOTO_BUCKET = "photos";
@@ -31,8 +34,26 @@ export function createApi(url: string, anonKey: string) {
   };
   return {
     sb,
+    /** Waiting in the inbox, newest first. */
     async listPending(): Promise<Photo[]> {
-      const { data, error } = await sb.from("photos").select("*").eq("status", "pending").order("created_at");
+      const { data, error } = await sb.from("photos").select("*").eq("status", "pending").order("created_at", { ascending: false });
+      if (error) throw error;
+      return data as Photo[];
+    },
+    /** Photos already inserted, most recently used first. Older rows without a date fall back to their arrival time. */
+    async listUsed(limit = 20): Promise<Photo[]> {
+      const { data, error } = await sb
+        .from("photos")
+        .select("*")
+        .eq("status", "imported")
+        .order("imported_at", { ascending: false, nullsFirst: false })
+        .order("created_at", { ascending: false })
+        .limit(limit);
+      if (error) throw error;
+      return data as Photo[];
+    },
+    async listTrashed(): Promise<Photo[]> {
+      const { data, error } = await sb.from("photos").select("*").eq("status", "trashed").order("trashed_at", { ascending: false });
       if (error) throw error;
       return data as Photo[];
     },
@@ -42,8 +63,34 @@ export function createApi(url: string, anonKey: string) {
       return data;
     },
     async markImported(id: string) {
-      const { error } = await sb.from("photos").update({ status: "imported" }).eq("id", id);
+      const { error } = await sb.from("photos").update({ status: "imported", imported_at: new Date().toISOString() }).eq("id", id);
       if (error) throw error;
+    },
+    /** Keeps a transcription with the photo so OCR is not paid for twice; null clears it. */
+    async saveOcr(id: string, latex: string | null) {
+      const { error } = await sb.from("photos").update({ ocr_latex: latex }).eq("id", id);
+      if (error) throw error;
+    },
+    /** An undoable delete: the file stays until the trash is purged. */
+    async trashPhoto(id: string) {
+      const { error } = await sb.from("photos").update({ status: "trashed", trashed_at: new Date().toISOString() }).eq("id", id);
+      if (error) throw error;
+    },
+    async restorePhoto(id: string) {
+      const { error } = await sb.from("photos").update({ status: "pending", trashed_at: null }).eq("id", id);
+      if (error) throw error;
+    },
+    /** Permanently deletes photos that have been in the trash longer than `days`. Returns how many. */
+    async purgeTrash(days = 7): Promise<number> {
+      const cutoff = new Date(Date.now() - days * 86_400_000).toISOString();
+      const { data, error } = await sb.from("photos").select("*").eq("status", "trashed").lt("trashed_at", cutoff);
+      if (error) throw error;
+      for (const p of data as Photo[]) {
+        const del = await sb.from("photos").delete().eq("id", p.id);
+        if (del.error) throw del.error;
+        await sb.storage.from(PHOTO_BUCKET).remove([p.storage_path]).catch(() => {});
+      }
+      return data.length;
     },
     // ---- synced documents and templates ----
     /** Includes soft-deleted rows: a tombstone is how this device learns of a deletion. */

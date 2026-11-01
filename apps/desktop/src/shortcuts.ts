@@ -20,6 +20,7 @@ function sections(vimOn: boolean): Section[] {
       rows: [
         ["Mod-Enter", "Compile and refresh the preview"],
         ["Mod-p", "Search all documents and open one (or create it)"],
+        ["Mod-Shift-f", "Format the document: re-indent environments and braces, trim trailing spaces, collapse blank lines"],
         ["Mod-,", "Open Settings"],
         ["ArrowDown / ArrowUp", "Move through an open menu or the document search results"],
         ["Escape", "Close the menu or a dialog"],
@@ -84,6 +85,16 @@ function sections(vimOn: boolean): Section[] {
       ],
     },
     {
+      title: "Photo viewer (click a photo in the inbox)",
+      rows: [
+        ["ArrowLeft / ArrowRight", "Previous / next photo"],
+        ["r / Shift-r", "Rotate right / left"],
+        ["+ / - / 0", "Zoom in / zoom out / fit to window"],
+        ["Mod-scroll", "Zoom with the mouse wheel; drag to pan when zoomed"],
+        ["Mod-Enter", "In the transcription box: insert it into the document"],
+      ],
+    },
+    {
       title: "My snippet shortcuts",
       note: mine.length
         ? "Work while typing, not in Vim normal mode. Defined in your snippets file (Menu → Snippets → Edit snippets file)."
@@ -114,6 +125,7 @@ function sections(vimOn: boolean): Section[] {
         [".", "Repeat the last change"],
         ["/text  n  N", "Search, next match, previous match"],
         [":w", "Compile and refresh the preview (the app's meaning of save)"],
+        [":fmt", "Format the document (same as Format document in the menu)"],
         [":%s/old/new/g", "Replace in the whole document"],
       ],
     },

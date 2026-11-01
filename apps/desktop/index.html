@@ -27,6 +27,7 @@
           </button>
           <div id="menu-list" role="menu" hidden>
             <button role="menuitem" id="compile"><span>Compile</span><kbd data-key="Mod-Enter"></kbd></button>
+            <button role="menuitem" id="format-doc"><span>Format document</span><kbd data-key="Mod-Shift-f"></kbd></button>
             <button role="menuitem" id="export-pdf"><span>Export PDF…</span></button>
             <hr role="separator" />
             <button role="menuitem" id="open-snippets"><span>Snippets…</span></button>
@@ -49,8 +50,8 @@
         <button id="sync" class="sync-chip" title="Sync status - click for details"></button>
       </header>
       <main>
-        <section id="editor"></section>
-        <div id="splitter" role="separator" aria-orientation="vertical" aria-label="Resize editor and preview"
+        <section id="editor"><div id="editor-note" role="status" aria-live="polite" hidden></div></section>
+        <div id="splitter" class="splitter" role="separator" aria-orientation="vertical" aria-label="Resize editor and preview"
              aria-valuemin="20" aria-valuemax="80" tabindex="0" title="Drag to resize (double-click to reset)"></div>
         <section id="preview">
           <div id="preview-scroll">
@@ -65,6 +66,8 @@
             <button type="button" id="compile-log-toggle" class="linklike" hidden>Show log</button>
           </div>
         </section>
+        <div id="splitter2" class="splitter" role="separator" aria-orientation="vertical" aria-label="Resize photo inbox"
+             tabindex="0" title="Drag to resize (double-click to reset)"></div>
         <aside id="inbox">
           <button id="inbox-toggle" class="inbox-toggle" aria-expanded="true" title="Minimize the photo inbox">
             <span class="label">Photo inbox</span>
@@ -147,20 +150,25 @@
         <fieldset>
           <legend>Photo OCR (handwriting → LaTeX)</legend>
           <label>Model <select id="set-ocr-model"></select></label>
-          <label>API key
-            <input id="set-ocr-key" type="password" placeholder="sk-ant-…" autocomplete="off" spellcheck="false" />
-          </label>
-          <div class="row">
-            <span id="set-ocr-status" class="muted"></span>
-            <span>
-              <button type="button" id="set-ocr-save">Save key</button>
-              <button type="button" id="set-ocr-test">Test</button>
-              <button type="button" id="set-ocr-remove">Remove</button>
-            </span>
+          <div class="ocr-key">
+            <div class="ocr-key-head">
+              <label for="set-ocr-key">Anthropic API key</label>
+              <span id="set-ocr-badge" class="key-badge">Checking…</span>
+            </div>
+            <div class="ocr-key-input">
+              <input id="set-ocr-key" type="password" placeholder="sk-ant-…" autocomplete="off" spellcheck="false" />
+              <button type="button" id="set-ocr-show" aria-pressed="false">Show</button>
+            </div>
+            <div class="ocr-key-actions">
+              <span id="set-ocr-status" class="muted" role="status" aria-live="polite"></span>
+              <button type="button" id="set-ocr-test">Test key</button>
+              <button type="button" id="set-ocr-remove" class="danger">Remove</button>
+              <button type="button" id="set-ocr-save" class="primary">Save key</button>
+            </div>
           </div>
           <span class="muted">
-            Your own Anthropic API key. It stays on this device and is sent only to Anthropic;
-            usage is billed to your Anthropic account.
+            Uses your own Anthropic API key, so usage is billed to your Anthropic account (the cost of each run is shown
+            after it finishes). The key stays on this device, is never synced, and is sent only to Anthropic.
           </span>
         </fieldset>
         <fieldset>
@@ -179,6 +187,50 @@
              role="combobox" aria-expanded="true" aria-controls="switcher-list" />
       <div id="switcher-list" role="listbox"></div>
       <div id="switcher-error" class="error"></div>
+    </dialog>
+
+    <dialog id="viewer">
+      <div class="dlg-head">
+        <strong id="viewer-title">Photo</strong>
+        <span class="spacer"></span>
+        <div class="viewer-tools">
+          <button type="button" class="icon-btn" id="viewer-rot-left" aria-label="Rotate left" title="Rotate left (Shift+R)"><svg viewBox="0 0 16 16" width="16" height="16" aria-hidden="true"><path d="M3 6.5V3M3 6.5h3.5M3.6 6.5A5 5 0 1 1 3 9.6" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/></svg></button>
+          <button type="button" class="icon-btn" id="viewer-rot-right" aria-label="Rotate right" title="Rotate right (R)"><svg viewBox="0 0 16 16" width="16" height="16" aria-hidden="true"><path d="M13 6.5V3M13 6.5H9.5M12.4 6.5A5 5 0 1 0 13 9.6" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/></svg></button>
+          <button type="button" class="icon-btn" id="viewer-zoom-out" aria-label="Zoom out" title="Zoom out (-)">−</button>
+          <button type="button" id="viewer-zoom-label" class="linklike" title="Fit to window (0)">Fit</button>
+          <button type="button" class="icon-btn" id="viewer-zoom-in" aria-label="Zoom in" title="Zoom in (+)">+</button>
+        </div>
+        <span class="spacer"></span>
+        <button type="button" id="viewer-ocr">OCR…</button>
+        <button type="button" id="viewer-insert" class="primary">Insert</button>
+        <button type="button" class="icon-btn" id="viewer-delete" aria-label="Delete photo" title="Delete photo"><svg viewBox="0 0 16 16" width="16" height="16" aria-hidden="true"><path d="M3 4.5h10M6.5 4.5V3h3v1.5M4.5 4.5l.6 8.5h5.8l.6-8.5M7 7v4M9 7v4" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linecap="round" stroke-linejoin="round"/></svg></button>
+        <button type="button" class="cancel icon-btn" aria-label="Close" title="Close (Esc)"><svg viewBox="0 0 16 16" width="14" height="14" aria-hidden="true"><path d="M3.5 3.5l9 9M12.5 3.5l-9 9" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round"/></svg></button>
+      </div>
+      <div id="viewer-stage"><div id="viewer-wrap"><img id="viewer-img" alt="" /></div></div>
+      <div id="viewer-foot" class="muted">← → other photos · R rotate · + − zoom · 0 fit · drag to pan when zoomed · Ctrl+scroll zooms</div>
+    </dialog>
+
+    <dialog id="ocr-dialog">
+      <div class="dlg-head">
+        <strong>Transcribe handwriting</strong>
+        <span id="ocr-model" class="muted"></span>
+        <span class="spacer"></span>
+        <button type="button" class="cancel icon-btn" aria-label="Close" title="Close (Esc)"><svg viewBox="0 0 16 16" width="14" height="14" aria-hidden="true"><path d="M3.5 3.5l9 9M12.5 3.5l-9 9" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round"/></svg></button>
+      </div>
+      <div class="ocr-body">
+        <div class="ocr-photo"><img id="ocr-img" alt="" title="Click to toggle full size" /></div>
+        <div class="ocr-right">
+          <div id="ocr-state" class="ocr-state"></div>
+          <textarea id="ocr-text" spellcheck="false" placeholder="The transcription appears here. You can edit it before inserting."></textarea>
+          <label class="check"><input type="checkbox" id="ocr-with-image" /> Also insert the photo above it</label>
+        </div>
+      </div>
+      <div class="row ocr-foot">
+        <button type="button" id="ocr-retry">Transcribe again</button>
+        <span class="spacer"></span>
+        <button type="button" class="cancel">Cancel</button>
+        <button type="button" id="ocr-insert" class="primary" disabled>Insert</button>
+      </div>
     </dialog>
 
     <dialog id="sync-dialog">

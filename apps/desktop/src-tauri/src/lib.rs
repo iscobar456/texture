@@ -1019,6 +1019,54 @@ async fn ocr_image(app: tauri::AppHandle, request: Request<'_>) -> Result<OcrRes
     })
 }
 
+// ---- inbox thumbnail cache ----
+// Small previews of inbox photos, kept on this device so the inbox does not download every full-size photo
+// each session. Purely a cache: safe to delete, never synced.
+
+fn thumb_cache_dir(app: &tauri::AppHandle, user: &str) -> Result<PathBuf, String> {
+    let dir = user_dir(app, user)?.join(".cache").join("inbox");
+    fs::create_dir_all(&dir).map_err(|e| e.to_string())?;
+    Ok(dir)
+}
+
+/// Photo ids are UUIDs; anything else never becomes a file name.
+fn valid_photo_id(id: &str) -> Result<&str, String> {
+    if !id.is_empty() && id.len() <= 64 && id.chars().all(|c| c.is_ascii_alphanumeric() || c == '-') {
+        Ok(id)
+    } else {
+        Err("invalid photo id".into())
+    }
+}
+
+#[tauri::command]
+fn thumb_get(app: tauri::AppHandle, user: String, id: String) -> Result<Response, String> {
+    let bytes = fs::read(thumb_cache_dir(&app, &user)?.join(format!("{}.jpg", valid_photo_id(&id)?))).map_err(|e| e.to_string())?;
+    Ok(Response::new(bytes))
+}
+
+/// Raw body is a JPEG; headers x-user and x-id.
+#[tauri::command]
+fn thumb_put(app: tauri::AppHandle, request: Request<'_>) -> Result<(), String> {
+    let (user, id) = (header(&request, "x-user")?, header(&request, "x-id")?);
+    let InvokeBody::Raw(bytes) = request.body() else {
+        return Err("expected raw body".into());
+    };
+    write_atomic(thumb_cache_dir(&app, &user)?.join(format!("{}.jpg", valid_photo_id(&id)?)), bytes)
+}
+
+/// Drops cached thumbnails of photos that no longer exist, so the cache cannot grow without bound.
+#[tauri::command]
+fn thumb_prune(app: tauri::AppHandle, user: String, keep: Vec<String>) -> Result<(), String> {
+    for entry in fs::read_dir(thumb_cache_dir(&app, &user)?).map_err(|e| e.to_string())?.flatten() {
+        let name = entry.file_name().to_string_lossy().to_string();
+        let Some(id) = name.strip_suffix(".jpg") else { continue };
+        if !keep.iter().any(|k| k == id) {
+            let _ = fs::remove_file(entry.path());
+        }
+    }
+    Ok(())
+}
+
 /// Compile `source` and return the PDF bytes. Prefers tectonic, falls back to pdflatex.
 fn build_pdf(
     app: &tauri::AppHandle,
@@ -1129,6 +1177,9 @@ pub fn run() {
             remove_local,
             compile,
             export_pdf,
+            thumb_get,
+            thumb_put,
+            thumb_prune,
             set_api_key,
             has_api_key,
             test_api_key,
