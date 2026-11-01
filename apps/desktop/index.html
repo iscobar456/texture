@@ -25,58 +25,79 @@
           <div id="menu-list" role="menu" hidden>
             <button role="menuitem" id="compile">Compile <kbd>Ctrl+Enter</kbd></button>
             <button role="menuitem" id="manage-templates">Manage templates…</button>
-            <button role="menuitem" id="open-snippets">Snippets &amp; shortcuts…</button>
+            <button role="menuitem" id="open-shortcuts">Keyboard shortcuts…</button>
+            <button role="menuitem" id="open-snippets">Snippets…</button>
             <button role="menuitem" id="export-pdf">Export PDF…</button>
             <button role="menuitem" id="open-settings">Settings…</button>
             <button role="menuitem" class="stub" data-stub="About">About hwscan</button>
             <button role="menuitem" id="sign-out">Sign out</button>
           </div>
         </div>
-        <button id="doc-button" title="Open or create a document">📄 <span id="doc-name"></span></button>
+        <button id="doc-button" title="Open or create a document">📄 <span id="doc-name"></span><span id="doc-dirty" class="dot warn" title="Not uploaded yet" hidden></span></button>
         <span id="status"></span>
         <span class="spacer"></span>
-        <span id="sync"></span>
+        <button id="sync" class="sync-chip" title="Sync status - click for details"></button>
       </header>
       <main>
         <section id="editor"></section>
-        <section id="preview"><div id="pages"></div><pre id="log" hidden></pre></section>
+        <div id="splitter" role="separator" aria-orientation="vertical" aria-label="Resize editor and preview"
+             aria-valuemin="20" aria-valuemax="80" tabindex="0" title="Drag to resize (double-click to reset)"></div>
+        <section id="preview">
+          <div id="preview-scroll">
+            <button id="preview-full" class="preview-full" aria-pressed="false" title="Full screen (Esc to exit)">
+            <svg class="icon-expand" viewBox="0 0 16 16" width="16" height="16" aria-hidden="true"><path d="M2 6V2h4M10 2h4v4M14 10v4h-4M6 14H2v-4" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"/></svg>
+            <svg class="icon-compress" viewBox="0 0 16 16" width="16" height="16" aria-hidden="true"><path d="M6 2v4H2M14 6h-4V2M10 14v-4h4M2 10h4v4" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"/></svg>
+          </button>
+            <div id="pages"></div><pre id="log" hidden></pre>
+          </div>
+          <div id="compile-bar" role="status" aria-live="polite">
+            <span id="compile-state" class="muted">Not compiled yet</span>
+            <button type="button" id="compile-log-toggle" class="linklike" hidden>Show log</button>
+          </div>
+        </section>
         <aside id="inbox">
-          <h3>Photo inbox</h3>
+          <button id="inbox-toggle" class="inbox-toggle" aria-expanded="true" title="Minimize the photo inbox">
+            <span class="label">Photo inbox</span>
+            <span id="inbox-count" class="badge" hidden></span>
+            <span id="inbox-chevron" class="chev">»</span>
+          </button>
           <div id="inbox-list"></div>
         </aside>
       </main>
     </div>
 
-    <dialog id="snippets-dialog">
+    <dialog id="shortcuts-dialog">
       <div class="picker-head">
-        <strong>Snippets &amp; shortcuts</strong>
+        <strong>Keyboard shortcuts</strong>
+        <input id="shortcuts-search" type="search" placeholder="Search…" autocomplete="off" />
         <span class="spacer"></span>
         <button type="button" class="cancel">Close</button>
       </div>
-      <div class="snip-layout">
-        <div class="snip-side">
-          <div id="snip-list"></div>
-          <button type="button" id="snip-new">New snippet</button>
-        </div>
-        <div class="snip-form">
-          <label>Trigger <input id="snip-trigger" placeholder="e.g. vv  (autocompletes as you type)" maxlength="32" autocomplete="off" /></label>
-          <label>Shortcut <input id="snip-key" placeholder="click, then press keys" readonly /></label>
-          <label>Description <input id="snip-desc" placeholder="optional" maxlength="80" /></label>
-          <label class="col">Inserts
-            <textarea id="snip-body" rows="7" spellcheck="false" placeholder="\vec{#{}}"></textarea>
-          </label>
-          <p class="muted">
-            Use <code>#{}</code> for a spot to jump to with Tab, and <code>#{text}</code> for one with placeholder text.
-            Repeat <code>#{1}</code> to fill several places at once. A shortcut needs Ctrl or Alt, and acts while typing
-            (not in Vim normal mode). Backspace clears it.
-          </p>
-          <p class="error" id="snip-error"></p>
-          <div class="row">
-            <button type="button" id="snip-delete">Delete</button>
-            <button type="button" id="snip-save">Save</button>
-          </div>
-        </div>
+      <div id="shortcuts-body"></div>
+    </dialog>
+
+    <dialog id="snippets-dialog">
+      <div class="picker-head">
+        <strong>Snippets</strong>
+        <input id="snip-search" type="search" placeholder="Search…" autocomplete="off" />
+        <span class="spacer"></span>
+        <button type="button" id="snip-edit">Edit snippets file</button>
+        <button type="button" id="snip-reset">Reset to defaults…</button>
+        <button type="button" class="cancel">Close</button>
       </div>
+      <div id="snip-errors" hidden></div>
+      <p class="muted snip-intro">
+        Everything here comes from your snippets file, which you can change freely. It syncs with your account.
+      </p>
+      <div id="snip-body"></div>
+    </dialog>
+
+    <dialog id="snip-reset-dialog">
+      <form method="dialog" id="snip-reset-form">
+        <h3>Reset snippets</h3>
+        <p>Replace your snippets file with the defaults that ship with the app? Anything you added or changed is lost, on your other devices too.</p>
+        <div class="row"><button type="button" class="cancel">Cancel</button><button value="ok">Reset</button></div>
+      </form>
     </dialog>
 
     <dialog id="settings-dialog">
@@ -140,6 +161,25 @@
           <button type="button" id="settings-reset">Reset to defaults</button>
           <button type="button" class="cancel">Close</button>
         </div>
+      </form>
+    </dialog>
+
+    <dialog id="sync-dialog">
+      <div class="picker-head">
+        <strong>Sync</strong>
+        <span class="spacer"></span>
+        <button type="button" id="sync-now">Sync now</button>
+        <button type="button" class="cancel">Close</button>
+      </div>
+      <div id="sync-body"></div>
+    </dialog>
+
+    <dialog id="closing-dialog">
+      <form method="dialog">
+        <h3>Closing hwscan</h3>
+        <p>Saving and syncing your changes first…</p>
+        <div class="row"><button type="button" id="quit-now">Quit now</button></div>
+        <span class="muted">Anything that does not finish uploading stays safe on this device and syncs next time.</span>
       </form>
     </dialog>
 

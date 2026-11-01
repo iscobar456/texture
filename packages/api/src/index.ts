@@ -15,10 +15,12 @@ export const PHOTO_BUCKET = "photos";
 export const FILES_BUCKET = "project-files";
 
 /** Documents and folders share the `documents` table, told apart by its `kind` column. */
-export type DocKind = "document" | "folder" | "template";
+export type DocKind = "document" | "folder" | "template" | "config";
 /** `path` is a folder path like "Physics/Week 3/HW 1"; for templates it is a plain name. */
 export type RemoteDoc = { path: string; updated_at: string; deleted_at: string | null; preview_at?: string | null };
-const table = (k: DocKind) => (k === "template" ? "templates" : "documents");
+const table = (k: DocKind) => (k === "template" ? "templates" : k === "config" ? "user_files" : "documents");
+/** Documents and folders share a table and carry preview/kind columns; the others are plain path + source. */
+const isDocTable = (k: DocKind) => k === "document" || k === "folder";
 
 export function createApi(url: string, anonKey: string) {
   const sb: SupabaseClient = createClient(url, anonKey);
@@ -41,9 +43,9 @@ export function createApi(url: string, anonKey: string) {
     // ---- synced documents and templates ----
     /** Includes soft-deleted rows: a tombstone is how this device learns of a deletion. */
     async listDocs(kind: DocKind): Promise<RemoteDoc[]> {
-      const cols = kind === "template" ? "path, updated_at, deleted_at" : "path, updated_at, deleted_at, preview_at";
+      const cols = isDocTable(kind) ? "path, updated_at, deleted_at, preview_at" : "path, updated_at, deleted_at";
       let q = sb.from(table(kind)).select(cols);
-      if (kind !== "template") q = q.eq("kind", kind);
+      if (isDocTable(kind)) q = q.eq("kind", kind);
       const { data, error } = await q;
       if (error) throw error;
       return data as unknown as RemoteDoc[];
@@ -55,7 +57,7 @@ export function createApi(url: string, anonKey: string) {
     },
     /** Insert a new doc. Returns the server updated_at, or null if the path is already taken. */
     async insertDoc(kind: DocKind, path: string, source: string): Promise<string | null> {
-      const row: Record<string, string> = kind === "template" ? { path, source } : { path, source, kind };
+      const row: Record<string, string> = isDocTable(kind) ? { path, source, kind } : { path, source };
       const { data, error } = await sb.from(table(kind)).insert(row).select("updated_at").single();
       if (error) {
         if (error.code === "23505") return null; // unique violation: someone else created it first

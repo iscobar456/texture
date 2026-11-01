@@ -264,6 +264,59 @@ fn walk(dir: &std::path::Path, prefix: &str, docs: &mut Vec<DocInfo>, folders: &
     }
 }
 
+// ---- synced config files (currently just the snippets file) ----
+
+/// Only these can be read or written, so a name from the frontend never becomes an arbitrary path.
+const CONFIG_NAMES: [&str; 1] = ["snippets"];
+
+/// `<user_dir>/.config/<name>.toml` plus its sync state beside it.
+fn config_paths(app: &tauri::AppHandle, user: &str, name: &str) -> Result<(PathBuf, PathBuf), String> {
+    if !CONFIG_NAMES.contains(&name) {
+        return Err(format!("unknown config {name:?}"));
+    }
+    let dir = user_dir(app, user)?.join(".config");
+    fs::create_dir_all(&dir).map_err(|e| e.to_string())?;
+    Ok((dir.join(format!("{name}.toml")), dir.join(format!("{name}.sync.json"))))
+}
+
+#[derive(Serialize)]
+struct ConfigInfo {
+    path: String,
+    dirty: bool,
+    remote_at: Option<String>,
+}
+
+#[tauri::command]
+fn list_configs(app: tauri::AppHandle, user: String) -> Result<Vec<ConfigInfo>, String> {
+    let mut out = vec![];
+    for name in CONFIG_NAMES {
+        let (file, meta_path) = config_paths(&app, &user, name)?;
+        if file.is_file() {
+            let meta = read_meta(&meta_path);
+            out.push(ConfigInfo { path: name.into(), dirty: meta.dirty, remote_at: meta.remote_at });
+        }
+    }
+    Ok(out)
+}
+
+/// None if the file has never been created on this device.
+#[tauri::command]
+fn load_config(app: tauri::AppHandle, user: String, name: String) -> Result<Option<String>, String> {
+    let (file, _) = config_paths(&app, &user, &name)?;
+    match fs::read_to_string(file) {
+        Ok(s) => Ok(Some(s)),
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(None),
+        Err(e) => Err(e.to_string()),
+    }
+}
+
+#[tauri::command]
+fn save_config(app: tauri::AppHandle, user: String, name: String, source: String) -> Result<(), String> {
+    let (file, meta_path) = config_paths(&app, &user, &name)?;
+    write_atomic(file, source)?;
+    update_meta(&meta_path, |m| m.dirty = true)
+}
+
 #[tauri::command]
 fn list_documents(app: tauri::AppHandle, user: String) -> Result<Vec<DocInfo>, String> {
     let (mut docs, mut folders) = (vec![], vec![]);
@@ -415,6 +468,11 @@ fn apply_remote(
             write_atomic(file, source).map_err(|e| e.to_string())?;
             update_meta(&meta_path, set)
         }
+        "config" => {
+            let (file, meta_path) = config_paths(&app, &user, &path)?;
+            write_atomic(file, source)?;
+            update_meta(&meta_path, set)
+        }
         _ => Err(format!("unknown kind {kind:?}")),
     }
 }
@@ -442,6 +500,7 @@ fn mark_synced(
             });
         }
         "template" => template_paths(&app, &user, &path)?,
+        "config" => config_paths(&app, &user, &path)?,
         _ => return Err(format!("unknown kind {kind:?}")),
     };
     let unchanged = fs::read_to_string(file).map(|cur| cur == pushed).unwrap_or(false);
@@ -925,6 +984,9 @@ pub fn run() {
         .plugin(tauri_plugin_opener::init())
         .plugin(tauri_plugin_dialog::init())
         .invoke_handler(tauri::generate_handler![
+            list_configs,
+            load_config,
+            save_config,
             list_documents,
             list_folders,
             create_folder,

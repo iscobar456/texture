@@ -1,113 +1,111 @@
-import {
-  RESERVED_KEYS,
-  TRIGGER_RE,
-  keyFromEvent,
-  saveSnippets,
-  showKey,
-  userSnippets,
-  type UserSnippet,
-} from "./completions";
+import { showKey } from "./completions";
+import { browseGroups, getActive } from "./snippets";
 
 const $ = <T extends HTMLElement>(id: string) => document.getElementById(id) as T;
 
 /**
- * The "Snippets & shortcuts" dialog. Edits are saved as you press Save; `onChange` lets the editor
- * pick up the new shortcuts.
+ * The Snippets dialog: a searchable list of everything the snippets file currently provides, plus the
+ * way into editing that file. The file itself is the only place snippets are defined.
  */
-export function initSnippetsUi(onChange: () => void) {
+export function initSnippetsUi(opts: {
+  /** Problems from the last time the file was parsed. */
+  errors: () => string[];
+  /** Open the snippets file in the editor. */
+  onEdit: () => void;
+  onReset: () => Promise<void>;
+}) {
   const dialog = $<HTMLDialogElement>("snippets-dialog");
-  const list = $("snip-list");
-  const trigger = $<HTMLInputElement>("snip-trigger");
-  const desc = $<HTMLInputElement>("snip-desc");
-  const key = $<HTMLInputElement>("snip-key");
-  const body = $<HTMLTextAreaElement>("snip-body");
-  const error = $("snip-error");
-  const del = $<HTMLButtonElement>("snip-delete");
+  const body = $("snip-body");
+  const search = $<HTMLInputElement>("snip-search");
+  const errorBox = $("snip-errors");
 
-  let selected: string | null = null; // null = a new, unsaved snippet
-  let shortcut = ""; // CodeMirror key name for the snippet being edited
-
-  const setShortcut = (k: string) => {
-    shortcut = k;
-    key.value = k ? showKey(k) : "";
-  };
-
-  function fill(s: UserSnippet | null) {
-    selected = s?.id ?? null;
-    trigger.value = s?.trigger ?? "";
-    desc.value = s?.description ?? "";
-    body.value = s?.body ?? "";
-    setShortcut(s?.shortcut ?? "");
-    error.textContent = "";
-    del.disabled = !s;
-    renderList();
-  }
-
-  function renderList() {
-    const items = userSnippets().map((s) => {
-      const row = document.createElement("button");
-      row.type = "button";
-      row.className = "snip-row" + (s.id === selected ? " current" : "");
-      const name = document.createElement("span");
-      name.textContent = s.trigger || "(shortcut only)";
-      const hint = document.createElement("span");
-      hint.className = "muted";
-      hint.textContent = s.shortcut ? showKey(s.shortcut) : "";
-      row.append(name, hint);
-      row.onclick = () => fill(s);
-      return row;
-    });
-    list.replaceChildren(...items);
-    if (!items.length) list.textContent = "No snippets yet.";
-  }
-
-  // Press the keys you want; Backspace/Delete clears.
-  key.addEventListener("keydown", (e) => {
-    e.preventDefault();
-    if (e.key === "Backspace" || e.key === "Delete") return setShortcut("");
-    if (e.key === "Tab") return key.blur();
-    const k = keyFromEvent(e);
-    if (k) setShortcut(k);
-  });
-
-  $("snip-new").addEventListener("click", () => fill(null));
-
-  del.addEventListener("click", () => {
-    if (!selected) return;
-    saveSnippets(userSnippets().filter((s) => s.id !== selected));
-    onChange();
-    fill(null);
-  });
-
-  $("snip-save").addEventListener("click", () => {
-    const t = trigger.value.trim();
-    const others = userSnippets().filter((s) => s.id !== selected);
-    const problem =
-      !body.value ? "The snippet needs some text to insert."
-      : !t && !shortcut ? "Give it a trigger word, a shortcut, or both."
-      : t && !TRIGGER_RE.test(t) ? "A trigger is letters and digits, optionally starting with a backslash (e.g. vv or \\vv)."
-      : t && others.some((s) => s.trigger === t) ? `Another snippet already uses the trigger "${t}".`
-      : shortcut && others.some((s) => s.shortcut === shortcut) ? "Another snippet already uses that shortcut."
-      : RESERVED_KEYS.includes(shortcut) ? `${showKey(shortcut)} is used by the app (Compile).`
+  function render() {
+    const errs = opts.errors();
+    errorBox.hidden = errs.length === 0;
+    errorBox.textContent = errs.length
+      ? `Your snippets file has problems, so the last working version is in use:\n${errs.map((e) => `• ${e}`).join("\n")}`
       : "";
-    if (problem) {
-      error.textContent = problem;
-      return;
+
+    const q = search.value.trim().toLowerCase();
+    const out: HTMLElement[] = [];
+    for (const g of browseGroups(getActive().config)) {
+      const items = g.items.filter(
+        (it) => !q || it.label.toLowerCase().includes(q) || (it.detail ?? "").toLowerCase().includes(q) || g.title.toLowerCase().includes(q),
+      );
+      if (!items.length && (q || g.items.length)) continue;
+      const sec = document.createElement("section");
+      const h = document.createElement("h4");
+      h.textContent = g.title;
+      const how = document.createElement("p");
+      how.className = "muted";
+      how.textContent = g.how;
+      sec.append(h, how);
+      if (items.some((it) => it.insert || it.detail || it.key)) {
+        // Entries with an expansion or a shortcut get a table: what you type, what it inserts, its shortcut.
+        const table = document.createElement("div");
+        table.className = "bi-rows";
+        for (const it of items) {
+          const label = document.createElement("code");
+          label.textContent = it.label;
+          const what = document.createElement("div");
+          if (it.insert) {
+            const code = document.createElement("code");
+            code.textContent = it.insert;
+            what.append(code);
+          }
+          if (it.detail) {
+            const d = document.createElement("div");
+            d.className = "muted";
+            d.textContent = it.detail;
+            what.append(d);
+          }
+          const key = document.createElement("div");
+          if (it.key) {
+            const k = document.createElement("kbd");
+            k.textContent = showKey(it.key).split("-").join("+");
+            key.append(k);
+          }
+          table.append(label, what, key);
+        }
+        sec.append(table);
+      } else {
+        // Plain names (Greek letters, packages, ...) are just a wrapped list.
+        const cols = document.createElement("div");
+        cols.className = "bi-cols";
+        for (const it of items) {
+          const c = document.createElement("code");
+          c.textContent = it.label;
+          cols.append(c);
+        }
+        sec.append(cols);
+      }
+      out.push(sec);
     }
-    const next: UserSnippet = {
-      id: selected ?? crypto.randomUUID(),
-      trigger: t,
-      description: desc.value.trim(),
-      shortcut,
-      body: body.value,
-    };
-    saveSnippets([...others, next].sort((a, b) => (a.trigger || "~").localeCompare(b.trigger || "~")));
-    onChange();
-    fill(next);
-  });
+    body.replaceChildren(...out);
+    if (!out.length) body.textContent = "No snippets match.";
+  }
+
+  search.addEventListener("input", render);
 
   $("open-snippets").addEventListener("click", () => {
-    fill(userSnippets()[0] ?? null);
+    search.value = "";
+    render();
     dialog.showModal();
   });
+
+  $("snip-edit").addEventListener("click", () => {
+    dialog.close();
+    opts.onEdit();
+  });
+
+  const resetDialog = $<HTMLDialogElement>("snip-reset-dialog");
+  $("snip-reset").addEventListener("click", () => resetDialog.showModal());
+  $("snip-reset-form").addEventListener("submit", async (e) => {
+    const submitter = (e as SubmitEvent).submitter as HTMLButtonElement | null;
+    if (submitter?.value !== "ok") return;
+    await opts.onReset();
+    render();
+  });
+
+  return { render };
 }

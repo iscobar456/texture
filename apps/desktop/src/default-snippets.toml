@@ -1,0 +1,394 @@
+# hwscan snippets - this file is yours. Edit it freely.
+#
+# Save with Ctrl+Enter (or :w in Vim mode). If something is wrong the errors are listed and the
+# previous version stays active. The file syncs with your account like your documents do.
+#
+# [[snippet]]   One autocomplete and/or keyboard shortcut.
+#     trigger      what you type to get it suggested, e.g. '\frac' or 'prob' (letters, digits, _ and *)
+#     body         the text to insert. #{} is a spot Tab jumps to, #{text} one with placeholder text,
+#                  and repeating #{1} fills several places at once
+#     description  shown next to the suggestion (optional)
+#     key          a keyboard shortcut, e.g. 'Mod-Alt-f' (Mod is Ctrl, or the Command key on a Mac).
+#                  Needs Ctrl or Alt. Works while typing, not in Vim normal mode (optional)
+#     group        heading in the Snippets list (optional)
+#     A snippet needs a trigger, a key, or both.
+# [[words]]     A list of plain commands suggested as prefix + word. Handy for \alpha, \beta, ...
+#     name, list (words separated by spaces), prefix (default '\'), detail (optional)
+# [environments] names  - offered after \begin{ ; choosing one inserts the whole \begin ... \end block
+# [packages]     names  - offered after \usepackage{
+#
+# Tip: 'single quotes' keep backslashes literal, so LaTeX needs no escaping.
+#      '''triple quotes''' can span several lines.
+
+# ---- Word snippets ----
+
+[[snippet]]
+trigger = 'prob'
+body = '''
+\section*{Problem #{1}}
+#{}'''
+description = 'problem heading'
+group = 'Word snippets'
+
+
+[[snippet]]
+trigger = 'sol'
+body = '''
+\begin{proof}[Solution]
+	#{}
+\end{proof}'''
+description = 'solution block'
+group = 'Word snippets'
+
+
+[[snippet]]
+trigger = 'ali'
+body = '''
+\begin{align*}
+	#{} &= #{} \\
+	&= #{}
+\end{align*}'''
+description = 'aligned equations'
+group = 'Word snippets'
+
+
+[[snippet]]
+trigger = 'fig'
+body = '''
+\begin{figure}[h]
+	\centering
+	\includegraphics[width=#{0.8}\linewidth]{#{}}
+	\caption{#{}}
+\end{figure}'''
+description = 'figure'
+group = 'Word snippets'
+
+
+[[snippet]]
+trigger = 'mat'
+body = '''
+\begin{pmatrix}
+	#{} & #{} \\
+	#{} & #{}
+\end{pmatrix}'''
+description = '2×2 matrix'
+group = 'Word snippets'
+
+
+[[snippet]]
+trigger = 'cas'
+body = '''
+\begin{cases}
+	#{} & \text{if } #{} \\
+	#{} & \text{otherwise}
+\end{cases}'''
+description = 'cases'
+group = 'Word snippets'
+
+
+# ---- Commands with blanks ----
+
+[[snippet]]
+trigger = '\frac'
+body = '\frac{#{}}{#{}}'
+description = 'fraction'
+group = 'Commands with blanks'
+
+
+[[snippet]]
+trigger = '\dfrac'
+body = '\dfrac{#{}}{#{}}'
+description = 'display fraction'
+group = 'Commands with blanks'
+
+
+[[snippet]]
+trigger = '\sqrt'
+body = '\sqrt{#{}}'
+description = 'square root'
+group = 'Commands with blanks'
+
+
+[[snippet]]
+trigger = '\binom'
+body = '\binom{#{}}{#{}}'
+description = 'binomial'
+group = 'Commands with blanks'
+
+
+[[snippet]]
+trigger = '\text'
+body = '\text{#{}}'
+description = 'text in math'
+group = 'Commands with blanks'
+
+
+[[snippet]]
+trigger = '\mathbb'
+body = '\mathbb{#{}}'
+group = 'Commands with blanks'
+
+
+[[snippet]]
+trigger = '\mathcal'
+body = '\mathcal{#{}}'
+group = 'Commands with blanks'
+
+
+[[snippet]]
+trigger = '\mathbf'
+body = '\mathbf{#{}}'
+group = 'Commands with blanks'
+
+
+[[snippet]]
+trigger = '\mathrm'
+body = '\mathrm{#{}}'
+group = 'Commands with blanks'
+
+
+[[snippet]]
+trigger = '\vec'
+body = '\vec{#{}}'
+group = 'Commands with blanks'
+
+
+[[snippet]]
+trigger = '\hat'
+body = '\hat{#{}}'
+group = 'Commands with blanks'
+
+
+[[snippet]]
+trigger = '\bar'
+body = '\bar{#{}}'
+group = 'Commands with blanks'
+
+
+[[snippet]]
+trigger = '\tilde'
+body = '\tilde{#{}}'
+group = 'Commands with blanks'
+
+
+[[snippet]]
+trigger = '\dot'
+body = '\dot{#{}}'
+group = 'Commands with blanks'
+
+
+[[snippet]]
+trigger = '\ddot'
+body = '\ddot{#{}}'
+group = 'Commands with blanks'
+
+
+[[snippet]]
+trigger = '\overline'
+body = '\overline{#{}}'
+group = 'Commands with blanks'
+
+
+[[snippet]]
+trigger = '\underline'
+body = '\underline{#{}}'
+group = 'Commands with blanks'
+
+
+[[snippet]]
+trigger = '\textbf'
+body = '\textbf{#{}}'
+group = 'Commands with blanks'
+
+
+[[snippet]]
+trigger = '\textit'
+body = '\textit{#{}}'
+group = 'Commands with blanks'
+
+
+[[snippet]]
+trigger = '\emph'
+body = '\emph{#{}}'
+group = 'Commands with blanks'
+
+
+[[snippet]]
+trigger = '\section'
+body = '\section{#{}}'
+group = 'Commands with blanks'
+
+
+[[snippet]]
+trigger = '\subsection'
+body = '\subsection{#{}}'
+group = 'Commands with blanks'
+
+
+[[snippet]]
+trigger = '\subsubsection'
+body = '\subsubsection{#{}}'
+group = 'Commands with blanks'
+
+
+[[snippet]]
+trigger = '\label'
+body = '\label{#{}}'
+group = 'Commands with blanks'
+
+
+[[snippet]]
+trigger = '\ref'
+body = '\ref{#{}}'
+group = 'Commands with blanks'
+
+
+[[snippet]]
+trigger = '\eqref'
+body = '\eqref{#{}}'
+group = 'Commands with blanks'
+
+
+[[snippet]]
+trigger = '\cite'
+body = '\cite{#{}}'
+group = 'Commands with blanks'
+
+
+[[snippet]]
+trigger = '\usepackage'
+body = '\usepackage{#{}}'
+group = 'Commands with blanks'
+
+
+[[snippet]]
+trigger = '\includegraphics'
+body = '\includegraphics[width=#{0.8}\linewidth]{#{}}'
+description = 'image'
+group = 'Commands with blanks'
+
+
+[[snippet]]
+trigger = '\left'
+body = '\left#{(} #{} \right#{)}'
+description = 'auto-sizing delimiters'
+group = 'Commands with blanks'
+
+
+[[snippet]]
+trigger = '\begin'
+body = '''
+\begin{#{}}
+	#{}
+\end{#{}}'''
+description = 'environment'
+group = 'Commands with blanks'
+
+
+[[snippet]]
+trigger = '\sum_'
+body = '\sum_{#{i=1}}^{#{n}} #{}'
+description = 'sum with limits'
+group = 'Commands with blanks'
+
+
+[[snippet]]
+trigger = '\int_'
+body = '\int_{#{a}}^{#{b}} #{} \, d#{x}'
+description = 'definite integral'
+group = 'Commands with blanks'
+
+
+[[snippet]]
+trigger = '\lim_'
+body = '\lim_{#{x \to \infty}} #{}'
+description = 'limit'
+group = 'Commands with blanks'
+
+
+[[snippet]]
+trigger = '\prod_'
+body = '\prod_{#{i=1}}^{#{n}} #{}'
+description = 'product with limits'
+group = 'Commands with blanks'
+
+
+[[snippet]]
+trigger = '\partial_'
+body = '\frac{\partial #{f}}{\partial #{x}}'
+description = 'partial derivative'
+group = 'Commands with blanks'
+
+
+# ---- Plain commands, as lists ----
+
+[[words]]
+name = 'Greek letters'
+prefix = '\'
+detail = 'Greek letter'
+list = '''
+alpha beta gamma delta epsilon varepsilon zeta eta theta vartheta
+iota kappa lambda mu nu xi pi varpi rho varrho
+sigma varsigma tau upsilon phi varphi chi psi omega Gamma
+Delta Theta Lambda Xi Pi Sigma Upsilon Phi Psi Omega
+'''
+
+
+[[words]]
+name = 'Symbols'
+prefix = '\'
+detail = 'symbol'
+list = '''
+infty partial nabla forall exists nexists emptyset in notin ni
+subset subseteq supset supseteq cup cap setminus times cdot pm
+mp leq geq neq approx equiv sim simeq cong propto
+ll gg to rightarrow Rightarrow leftarrow Leftarrow leftrightarrow Leftrightarrow mapsto
+implies impliedby iff ldots cdots vdots ddots angle perp parallel
+circ bullet oplus otimes wedge vee neg land lor therefore
+because hbar ell Re Im aleph prime
+'''
+
+
+[[words]]
+name = 'Operators'
+prefix = '\'
+detail = 'operator'
+list = '''
+sin cos tan cot sec csc arcsin arccos arctan sinh
+cosh tanh log ln exp lim limsup liminf max min
+sup inf det dim ker gcd deg arg Pr
+'''
+
+
+[[words]]
+name = 'Big operators'
+prefix = '\'
+detail = 'big operator'
+list = '''
+sum int iint iiint oint prod coprod bigcup bigcap bigoplus
+'''
+
+
+[[words]]
+name = 'Spacing and structure'
+prefix = '\'
+list = '''
+quad qquad hspace vspace newline newpage noindent centering maketitle tableofcontents
+item hline
+'''
+
+
+[environments]
+names = '''
+document equation equation* align align* aligned gather gather* multline split
+cases matrix pmatrix bmatrix vmatrix Vmatrix array itemize enumerate description
+center figure table tabular theorem lemma proof definition remark example
+verbatim minipage abstract
+'''
+
+[packages]
+names = '''
+amsmath amssymb amsthm graphicx geometry hyperref tikz pgfplots siunitx physics
+mathtools enumitem xcolor booktabs fancyhdr listings cancel bm float caption
+subcaption setspace array multirow url cleveref microtype fontenc inputenc lmodern
+'''

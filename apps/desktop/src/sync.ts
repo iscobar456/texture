@@ -22,6 +22,8 @@ export type SyncResult = {
   removed: string[];
   /** Documents that need their images synced (pulled, or newly pushed such as after a move). */
   touched: Set<string>;
+  /** The snippets file was replaced by a newer copy from another device. */
+  configPulled: boolean;
   /** Items that failed individually (e.g. a malformed name on the server). Everything else still synced. */
   errors: string[];
 };
@@ -30,10 +32,12 @@ const LIST_CMD: Record<DocKind, string> = {
   document: "list_documents",
   folder: "list_folders",
   template: "list_templates",
+  config: "list_configs",
 };
 
 async function readLocal(user: string, kind: DocKind, path: string): Promise<string> {
   if (kind === "folder") return "";
+  if (kind === "config") return (await invoke<string | null>("load_config", { user, name: path })) ?? "";
   return kind === "document"
     ? invoke<string>("load_source", { user, path })
     : invoke<string>("read_template", { user, name: path });
@@ -76,6 +80,7 @@ async function syncKind(api: Api, user: string, kind: DocKind, out: SyncResult) 
       user, kind, path: asPath, source: doc.source, remoteAt: dirty ? null : doc.updated_at, dirty,
     });
     if (kind === "document" && !dirty) out.pulled.push(asPath);
+    if (kind === "config") out.configPulled = true;
   };
 
   const push = async (path: string, baseAt: string | null, undelete = false) => {
@@ -186,10 +191,12 @@ let running = false;
 export async function runSync(api: Api, user: string, current: string | null): Promise<SyncResult | null> {
   if (running) return null;
   running = true;
-  const out: SyncResult = { pulled: [], conflicts: [], removed: [], touched: new Set(), errors: [] };
+  const out: SyncResult = { pulled: [], conflicts: [], removed: [], touched: new Set(), errors: [], configPulled: false };
   try {
     await syncDeletions(api, user);
     await syncKind(api, user, "template", out);
+    // A problem here (e.g. the server table is not set up yet) must not stop documents from syncing.
+    await syncKind(api, user, "config", out).catch((e) => out.errors.push(`config: ${e?.message ?? e}`));
     // Documents before folders, so folders deleted elsewhere are already empty when we try to remove them.
     await syncKind(api, user, "document", out);
     await syncKind(api, user, "folder", out);

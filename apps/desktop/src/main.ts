@@ -13,8 +13,24 @@ import workerUrl from "pdfjs-dist/build/pdf.worker.min.mjs?url";
 import { createApi, type Photo } from "@hwscan/api";
 import { runSync } from "./sync";
 import { EditorState } from "@codemirror/state";
-import { latexSource, loadSnippets, snippetKeymap, userSnippets } from "./completions";
+import { latexSource, snippetKeymap } from "./completions";
+import {
+  DEFAULT_SNIPPETS_TOML,
+  SNIPPETS_CONFIG,
+  clearLegacySnippets,
+  compile as compileSnippets,
+  defaultCompiled,
+  getActive,
+  legacySnippetsToml,
+  parseSnippets,
+  setActive,
+} from "./snippets";
+import { toml } from "@codemirror/legacy-modes/mode/toml";
 import { initSnippetsUi } from "./snippets-ui";
+import { initShortcutsUi } from "./shortcuts";
+import { initLayout } from "./layout";
+import { collectPending, initSyncUi, type Pending } from "./sync-ui";
+import { getCurrentWindow } from "@tauri-apps/api/window";
 import { DEFAULTS, EDITOR_THEMES, OCR_MODELS, loadSettings, saveSettings, applyAppearance, type Settings } from "./settings";
 
 pdfjs.GlobalWorkerOptions.workerSrc = workerUrl;
@@ -33,13 +49,17 @@ let user = "";
 let docPath = ""; // path of the open document, e.g. "Physics/Week 3/HW 1"
 /** Set while a template (not a document) is loaded in the editor; docPath keeps the last open document. */
 let templateName: string | null = null;
+/** Set while the snippets file is loaded in the editor (it edits like a document, but is TOML, not LaTeX). */
+let snippetsOpen = false;
+/** Problems found the last time the snippets file was parsed; empty means the active snippets match the file. */
+let snippetErrors: string[] = [];
 
 // ---- editor ----
 let view: EditorView | undefined;
 const vimSlot = new Compartment();
 const wrapSlot = new Compartment();
 const snippetSlot = new Compartment();
-loadSnippets();
+const langSlot = new Compartment();
 
 let settings: Settings = loadSettings();
 applyAppearance(settings); // before sign-in, so the login screen is themed too
@@ -49,7 +69,7 @@ let loadingDoc = false; // true while replacing the whole document, so it isn't 
 const source = () => view!.state.doc.toString();
 
 // What a pending edit belongs to; captured at edit time so switching documents can't misfile a save.
-let pendingDoc: { template: boolean; path: string } | null = null;
+let pendingDoc: { kind: "document" | "template" | "snippets"; path: string } | null = null;
 let saveTimer: number | undefined;
 let autoTimer: number | undefined;
 
@@ -58,9 +78,28 @@ async function flushSave() {
   if (pendingDoc === null) return;
   const p = pendingDoc;
   pendingDoc = null;
-  if (p.template) await invoke("save_template", { user, name: p.path, source: source(), overwrite: true });
-  else await invoke("save_source", { user, path: p, source: source() });
+  if (p.kind === "template") await invoke("save_template", { user, name: p.path, source: source(), overwrite: true });
+  else if (p.kind === "snippets") {
+    // Always saved, even with mistakes (it is work in progress); only a valid file becomes active.
+    await invoke("save_config", { user, name: p.path, source: source() });
+    applySnippetsText(source());
+  } else await invoke("save_source", { user, path: p.path, source: source() });
   syncSoon();
+}
+
+/** LaTeX (with its autocomplete) for documents and templates; plain TOML highlighting for the snippets file. */
+function languageFor() {
+  return snippetsOpen
+    ? StreamLanguage.define(toml)
+    : [StreamLanguage.define(stex), EditorState.languageData.of(() => [{ autocomplete: latexSource }])];
+}
+
+/** Snippet shortcuts must not fire while editing the snippets file itself. */
+const snippetKeys = () => (snippetsOpen ? [] : snippetKeymap(getActive().keys));
+
+/** Re-points the editor's language and shortcuts at whatever is loaded now. */
+function applyEditorMode() {
+  view?.dispatch({ effects: [langSlot.reconfigure(languageFor()), snippetSlot.reconfigure(snippetKeys())] });
 }
 
 function createEditor(doc: string) {
@@ -70,21 +109,25 @@ function createEditor(doc: string) {
     extensions: [
       // Listed before vim() so Ctrl+Enter still wins over its key handling.
       Prec.highest(keymap.of([{ key: "Mod-Enter", run: () => (void compile(), true) }])),
-      snippetSlot.of(snippetKeymap(userSnippets())), // before vim(), at the same precedence, so it wins
+      snippetSlot.of(snippetKeys()), // before vim(), at the same precedence, so it wins
       vimSlot.of(settings.editing === "vim" ? vim() : []),
       basicSetup,
-      StreamLanguage.define(stex),
+      langSlot.of(languageFor()),
       wrapSlot.of(settings.wrap ? EditorView.lineWrapping : []),
-      EditorState.languageData.of(() => [{ autocomplete: latexSource }]),
       softTheme,
       syntaxHighlighting(softHighlight),
       keymap.of([indentWithTab]),
       EditorView.updateListener.of((u) => {
         if (!u.docChanged || loadingDoc) return;
-        pendingDoc = templateName !== null ? { template: true, path: templateName } : { template: false, path: docPath };
+        markStale();
+        pendingDoc = snippetsOpen
+          ? { kind: "snippets", path: SNIPPETS_CONFIG }
+          : templateName !== null
+            ? { kind: "template", path: templateName }
+            : { kind: "document", path: docPath };
         clearTimeout(saveTimer);
         saveTimer = window.setTimeout(() => void flushSave(), 800);
-        if (settings.autoCompile) {
+        if (settings.autoCompile && !snippetsOpen) {
           clearTimeout(autoTimer);
           autoTimer = window.setTimeout(() => void compile(true), 1500);
         }
@@ -125,32 +168,104 @@ function insertAtCursor(text: string) {
 // ---- compile + preview ----
 let compiling = false;
 
+// ---- compile status bar (bottom of the preview) ----
+type BarState =
+  | { kind: "idle" }
+  | { kind: "compiling" }
+  | { kind: "ok"; text: string }
+  | { kind: "failed"; text: string };
+
+let bar: BarState = { kind: "idle" };
+/** The document changed after the state in `bar` was produced. */
+let stale = false;
+/** Full text of the last problem report; "Show log" displays it again after it was hidden. */
+let lastLog = "";
+
+function renderBar() {
+  const el = $("compile-state");
+  el.className = bar.kind === "failed" ? "failed" : "muted";
+  el.replaceChildren();
+  if (bar.kind === "compiling") {
+    const sp = document.createElement("span");
+    sp.className = "spinner";
+    el.append(sp, "Compiling…");
+  } else {
+    el.append(bar.kind === "idle" ? "Not compiled yet" : bar.text);
+    if (stale && bar.kind !== "idle") el.append(" · edited since");
+  }
+  const toggle = $("compile-log-toggle");
+  const hasLog = bar.kind === "failed" || lastLog !== "";
+  toggle.hidden = !hasLog;
+  toggle.textContent = $("log").hidden ? "Show log" : "Hide log";
+}
+
+/** Shows (or hides, with null) the log text under the pages. */
+function setLog(text: string | null) {
+  if (text !== null) lastLog = text;
+  $("log").hidden = text === null;
+  if (text !== null) $("log").textContent = text;
+  renderBar();
+}
+
+function setBar(next: BarState) {
+  bar = next;
+  if (next.kind !== "compiling") stale = false;
+  renderBar();
+}
+
+/** Called when switching documents/templates: nothing has been compiled for this one yet. */
+function resetBar() {
+  lastLog = "";
+  stale = false;
+  $("log").hidden = true;
+  setBar({ kind: "idle" });
+}
+
+function markStale() {
+  if (stale) return;
+  stale = true;
+  renderBar();
+}
+
+$("compile-log-toggle").addEventListener("click", () => {
+  if ($("log").hidden) setLog(lastLog);
+  else setLog(null);
+});
+
 /** `quiet` is for automatic compiles: a failure mid-typing shouldn't throw the error log at you. */
 async function compile(quiet = false) {
   if (compiling || !view) return;
+  if (snippetsOpen) {
+    // Nothing to typeset: save, validate and apply the snippets file instead.
+    pendingDoc = { kind: "snippets", path: SNIPPETS_CONFIG };
+    await flushSave();
+    return;
+  }
   compiling = true;
-  status("Compiling…");
-  const log = $("log");
+  stale = false; // edits made while this runs mark it stale again
+  setBar({ kind: "compiling" });
   try {
     const bytes = new Uint8Array(await invoke<ArrayBuffer>("compile", { user, path: templateName ?? docPath, source: source(), scratch: templateName !== null }));
-    log.hidden = true;
-    const thumb = await renderPdf(bytes);
-    if (thumb && templateName === null) void savePreview(docPath, thumb);
-    status("Compiled");
+    lastLog = "";
+    setLog(null);
+    const { first, pages } = await renderPdf(bytes);
+    if (first && templateName === null) void savePreview(docPath, first);
+    const wasStale = stale; // typed while compiling
+    setBar({ kind: "ok", text: `✓ Compiled ${new Date().toLocaleTimeString([], { hour: "numeric", minute: "2-digit" })} · ${pages} page${pages === 1 ? "" : "s"}` });
+    if (wasStale) markStale();
   } catch (e) {
-    if (quiet) {
-      status("Compile errors (press Ctrl+Enter to see them)");
-    } else {
-      log.hidden = false;
-      log.textContent = String(e);
-      status("Compile failed");
-    }
+    const wasStale = stale;
+    lastLog = String(e);
+    // A manual compile shows the log at once; an automatic one only reports it, with a link.
+    setBar({ kind: "failed", text: "✗ Compile failed" });
+    setLog(quiet ? null : lastLog);
+    if (wasStale) markStale();
   } finally {
     compiling = false;
   }
 }
 
-async function renderPdf(data: Uint8Array): Promise<HTMLCanvasElement | undefined> {
+async function renderPdf(data: Uint8Array): Promise<{ first: HTMLCanvasElement | undefined; pages: number }> {
   const pdf = await pdfjs.getDocument({ data }).promise;
   const canvases: HTMLCanvasElement[] = [];
   for (let n = 1; n <= pdf.numPages; n++) {
@@ -163,7 +278,7 @@ async function renderPdf(data: Uint8Array): Promise<HTMLCanvasElement | undefine
     canvases.push(canvas);
   }
   $("pages").replaceChildren(...canvases); // swap at the end to avoid flicker
-  return canvases[0];
+  return { first: canvases[0], pages: canvases.length };
 }
 
 /** Stores a small PNG of page 1 for the document picker. Best effort. */
@@ -184,6 +299,7 @@ $("compile").addEventListener("click", () => void compile());
 // Documents live in the app's private data folder; this is how a PDF gets out.
 $("export-pdf").addEventListener("click", async () => {
   if (!view) return;
+  if (snippetsOpen) return void status("The snippets file has nothing to export");
   const target = templateName ?? docPath;
   let dest = await save({
     defaultPath: `${baseOf(target)}.pdf`,
@@ -197,14 +313,88 @@ $("export-pdf").addEventListener("click", async () => {
     await invoke("export_pdf", { user, path: target, source: source(), scratch: templateName !== null, dest });
     status(`Exported to ${dest}`);
   } catch (e) {
-    $("log").hidden = false;
-    $("log").textContent = String(e);
+    setLog(String(e));
     status("Export failed");
   }
 });
 
-// ---- snippets ----
-initSnippetsUi(() => view?.dispatch({ effects: snippetSlot.reconfigure(snippetKeymap(userSnippets())) }));
+initShortcutsUi(() => settings.editing === "vim");
+const layout = initLayout();
+
+// ---- snippets: one user-owned TOML file (see default-snippets.toml) ----
+const snippetsUi = initSnippetsUi({
+  errors: () => snippetErrors,
+  onEdit: () => void openSnippetsFile(),
+  onReset: resetSnippets,
+});
+
+/** Parses the file text. A valid file becomes active; an invalid one is reported and the old one stays. */
+function applySnippetsText(text: string): boolean {
+  const r = parseSnippets(text);
+  snippetErrors = r.errors;
+  if (r.config) {
+    setActive(compileSnippets(r.config));
+    view?.dispatch({ effects: snippetSlot.reconfigure(snippetKeys()) });
+  }
+  snippetsUi.render();
+  if (snippetsOpen) showSnippetStatus();
+  return r.config !== null;
+}
+
+function showSnippetStatus() {
+  if (snippetErrors.length) {
+    const n = snippetErrors.length;
+    const text = `The snippets file has ${n} problem${n === 1 ? "" : "s"}. ` +
+      `The last working version stays active until they are fixed:\n\n${snippetErrors.map((e) => `• ${e}`).join("\n")}`;
+    setBar({ kind: "failed", text: `✗ Snippets: ${n} problem${n === 1 ? "" : "s"}` });
+    setLog(text);
+  } else {
+    setLog(null);
+    lastLog = "";
+    setBar({ kind: "ok", text: "✓ Snippets applied" });
+  }
+}
+
+async function openSnippetsFile() {
+  await flushSave();
+  const text = (await invoke<string | null>("load_config", { user, name: SNIPPETS_CONFIG })) ?? DEFAULT_SNIPPETS_TOML;
+  snippetsOpen = true;
+  templateName = null;
+  if (view) setDoc(text);
+  else createEditor(text);
+  applyEditorMode();
+  $("pages").replaceChildren();
+  $("doc-name").textContent = "Snippets file";
+  markOpenItem(syncUi.getPending());
+  showSnippetStatus();
+  view?.focus();
+}
+
+async function resetSnippets() {
+  await flushSave();
+  await invoke("save_config", { user, name: SNIPPETS_CONFIG, source: DEFAULT_SNIPPETS_TOML });
+  applySnippetsText(DEFAULT_SNIPPETS_TOML);
+  if (snippetsOpen) setDoc(DEFAULT_SNIPPETS_TOML);
+  syncSoon();
+}
+
+/** At sign-in: load the user's file, or create it from the defaults (plus any snippets from the old editor). */
+async function initSnippets() {
+  let text = await invoke<string | null>("load_config", { user, name: SNIPPETS_CONFIG });
+  if (text === null) {
+    const withOld = DEFAULT_SNIPPETS_TOML + legacySnippetsToml();
+    // Old snippets are only carried over if the result is still a valid file.
+    text = parseSnippets(withOld).config ? withOld : DEFAULT_SNIPPETS_TOML;
+    await invoke("save_config", { user, name: SNIPPETS_CONFIG, source: text });
+    clearLegacySnippets();
+    syncSoon();
+  }
+  if (!applySnippetsText(text)) {
+    setActive(defaultCompiled());
+    snippetsUi.render();
+    status("Your snippets file has problems, so the defaults are in use. Fix it under Menu → Snippets.");
+  }
+}
 
 // ---- settings ----
 const field = {
@@ -334,13 +524,16 @@ async function openDocument(path: string) {
   await flushSave();
   docPath = path;
   templateName = null;
+  snippetsOpen = false;
   try { localStorage.setItem(lastKey(), path); } catch {}
   const text = await invoke<string>("load_source", { user, path });
   if (view) setDoc(text);
   else createEditor(text);
+  applyEditorMode();
   $("pages").replaceChildren();
-  $("log").hidden = true;
+  resetBar();
   $("doc-name").textContent = path;
+  markOpenItem(syncUi.getPending());
   void refreshInbox();
   syncSoon();
 }
@@ -348,12 +541,15 @@ async function openDocument(path: string) {
 async function openTemplate(name: string) {
   await flushSave();
   templateName = name;
+  snippetsOpen = false;
   const text = await invoke<string>("read_template", { user, name });
   if (view) setDoc(text);
   else createEditor(text);
+  applyEditorMode();
   $("pages").replaceChildren();
-  $("log").hidden = true;
+  resetBar();
   $("doc-name").textContent = `Template: ${name}`;
+  markOpenItem(syncUi.getPending());
 }
 
 // Cancel is type="button" so that pressing Enter in a field submits via the OK button, not Cancel.
@@ -405,6 +601,14 @@ document.addEventListener("click", () => document.querySelectorAll(".popup").for
 // -- document picker --
 let pickerFolder = ""; // "" is the top level
 let previewUrls: string[] = [];
+
+/** A small amber dot marking something that has not been uploaded yet. */
+function dotEl(tip: string): HTMLElement {
+  const dot = document.createElement("span");
+  dot.className = "dot warn";
+  dot.title = tip;
+  return dot;
+}
 
 async function renderPicker() {
   previewUrls.forEach((u) => URL.revokeObjectURL(u));
@@ -460,7 +664,9 @@ async function renderPicker() {
     title.textContent = baseOf(f);
     const meta = document.createElement("div");
     meta.className = "meta";
-    meta.textContent = `${count} document${count === 1 ? "" : "s"}`;
+    const unsynced = docs.filter((d) => d.dirty && d.path.startsWith(f + "/")).length;
+    meta.textContent = `${count} document${count === 1 ? "" : "s"}${unsynced ? ` · ${unsynced} waiting to upload` : ""}`;
+    if (unsynced) title.prepend(dotEl("Contains changes waiting to upload"));
     card.append(thumb, title, meta);
     cards.push(card);
   }
@@ -492,7 +698,8 @@ async function renderPicker() {
     title.textContent = baseOf(d.path);
     const meta = document.createElement("div");
     meta.className = "meta";
-    meta.textContent = d.dirty ? "Not synced yet" : "";
+    meta.textContent = d.dirty ? "Waiting to upload" : "";
+    if (d.dirty) title.prepend(dotEl("Changes not uploaded yet"));
     card.append(thumb, title, meta);
     cards.push(card);
   }
@@ -763,7 +970,7 @@ async function renderTemplates() {
     title.textContent = t.path;
     const meta = document.createElement("div");
     meta.className = "meta";
-    meta.textContent = t.builtin ? "Built-in" : t.dirty ? "Not synced yet" : "";
+    meta.textContent = t.builtin ? "Built-in" : t.dirty ? "Waiting to upload" : "";
     card.append(
       thumb, title, meta,
       kebab($("tpl-manager"), [
@@ -784,39 +991,93 @@ $("tpl-manager-close").addEventListener("click", () => $<HTMLDialogElement>("tpl
 
 // ---- sync ----
 let syncTimer: number | undefined;
-const setSync = (s: string) => ($("sync").textContent = s);
+
+const syncUi = initSyncUi({
+  user: () => user,
+  syncNow: () => {
+    clearTimeout(syncTimer);
+    void doSync();
+  },
+  onPending: (p) => markOpenItem(p),
+});
+
+/** Dot next to the open document's name while it has edits the server has not seen. */
+function markOpenItem(p: Pending) {
+  const dirty = snippetsOpen ? p.snippetsDirty : templateName !== null ? p.dirtyTemplates.has(templateName) : p.dirtyDocs.has(docPath);
+  $("doc-dirty").hidden = !dirty;
+}
 
 function syncSoon() {
   clearTimeout(syncTimer);
   syncTimer = window.setTimeout(() => void doSync(), 2000);
+  void syncUi.refreshPending(); // the chip should show "1 change waiting" right away, not after the next sync
 }
 
-async function doSync() {
-  if (!user) return;
-  setSync("Syncing…");
+let syncRun: Promise<void> | null = null;
+
+/** One pass at a time; a caller that arrives mid-pass shares it. */
+function doSync(): Promise<void> {
+  if (!user) return Promise.resolve();
+  if (!syncRun) syncRun = runPass().finally(() => (syncRun = null));
+  return syncRun;
+}
+
+async function runPass() {
+  syncUi.syncing();
   try {
     await flushSave();
+    if (!navigator.onLine) return syncUi.failed("No network connection");
     const res = await runSync(api, user, docPath || null);
-    if (res === null) return;
+    if (res === null) return syncUi.skipped();
     // Reload the open document if the server copy replaced it. flushSave() above means no edits were lost.
-    if (templateName === null && res.pulled.includes(docPath)) setDoc(await invoke<string>("load_source", { user, path: docPath }));
-    // The open document was deleted on another device (and had no local edits to keep it alive).
-    if (templateName === null && docPath && res.removed.some((p) => remap(docPath, p, "\0") !== docPath)) await openAnyDocument();
-    if ($<HTMLDialogElement>("picker").open) void renderPicker();
-    if (res.errors.length) {
-      console.warn("sync errors", res.errors);
-      setSync(`Synced with ${res.errors.length} error${res.errors.length === 1 ? "" : "s"}`);
-      $("sync").title = res.errors.join("\n");
-    } else {
-      setSync("Synced");
-      $("sync").title = "";
+    if (res.configPulled) {
+      const t = await invoke<string | null>("load_config", { user, name: SNIPPETS_CONFIG });
+      if (t !== null) {
+        applySnippetsText(t);
+        if (snippetsOpen) setDoc(t);
+      }
     }
+    if (templateName === null && !snippetsOpen && res.pulled.includes(docPath)) setDoc(await invoke<string>("load_source", { user, path: docPath }));
+    // The open document was deleted on another device (and had no local edits to keep it alive).
+    if (templateName === null && !snippetsOpen && docPath && res.removed.some((p) => remap(docPath, p, "\0") !== docPath)) await openAnyDocument();
+    if ($<HTMLDialogElement>("picker").open) void renderPicker();
+    if (res.errors.length) console.warn("sync errors", res.errors);
     if (res.conflicts.length) status(`Conflict: server version kept as "${res.conflicts.join('", "')}"`);
+    syncUi.done({ errors: res.errors, conflicts: res.conflicts });
   } catch (e) {
     console.warn("sync failed", e);
-    setSync(navigator.onLine ? "Sync failed — will retry" : "Offline — changes saved locally");
+    syncUi.failed(String((e as Error)?.message ?? e));
   }
 }
+
+// Closing the window: save, then give a sync a few seconds. Local-first, so whatever does not finish
+// is safe on disk and goes up next time; the "Quit now" button means this can never trap you.
+let closing = false;
+void getCurrentWindow().onCloseRequested(async (event) => {
+  if (!user || closing) return; // not signed in (or already closing): close normally
+  closing = true;
+  event.preventDefault();
+  const win = getCurrentWindow();
+  const dialog = $<HTMLDialogElement>("closing-dialog");
+  dialog.showModal();
+  $("quit-now").onclick = () => void win.destroy();
+  try {
+    await flushSave();
+    await Promise.race([
+      (async () => {
+        // Up to two passes: the second catches anything saved while the first was running.
+        for (let i = 0; i < 2; i++) {
+          await doSync();
+          if (!(await collectPending(user)).items.length) break;
+        }
+      })(),
+      new Promise((resolve) => setTimeout(resolve, 8000)),
+    ]);
+  } catch (e) {
+    console.warn("sync on exit failed", e);
+  }
+  await win.destroy();
+});
 
 window.addEventListener("online", () => void doSync());
 setInterval(() => void doSync(), 60_000);
@@ -828,6 +1089,7 @@ async function refreshInbox() {
     const photos = await api.listPending();
     list.replaceChildren(...(await Promise.all(photos.map((p) => photoCard(p)))));
     if (!photos.length) list.textContent = "No pending photos";
+    layout.setInboxCount(photos.length);
   } catch {
     list.textContent = "Photo inbox needs a connection";
   }
@@ -873,7 +1135,7 @@ async function photoCard(p: Photo) {
   };
 
   const needDoc = () => {
-    if (templateName !== null) throw new Error("Open a document to insert photos");
+    if (templateName !== null || snippetsOpen) throw new Error("Open a document to insert photos");
   };
   const saveImage = async () => {
     needDoc();
@@ -924,8 +1186,10 @@ async function start(userId: string) {
   $("auth").hidden = true;
   $("app").hidden = false;
 
+  syncUi.start();
   // Pull first on a fresh device so we don't invent a document that the server already has.
   await doSync();
+  await initSnippets();
 
   const docs = await invoke<DocInfo[]>("list_documents", { user });
   let last: string | null = null;
