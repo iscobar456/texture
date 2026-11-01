@@ -702,6 +702,7 @@ async function openTemplate(name: string) {
   resetBar();
   setDocLabel("Template / ", name);
   markOpenItem(syncUi.getPending());
+  void compile(true); // same as opening a document: the preview is there on arrival
 }
 
 // Cancel is type="button" so that pressing Enter in a field submits via the OK button, not Cancel.
