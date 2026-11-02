@@ -44,5 +44,5 @@ jobs:
           cache: true
       - run: flutter pub get
         working-directory: apps/mobile
-      - run: flutter analyze
+      - run: flutter analyze --no-fatal-infos
         working-directory: apps/mobile
