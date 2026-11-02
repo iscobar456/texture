@@ -1,3 +1,5 @@
+mod latex;
+
 use std::fs;
 use std::path::PathBuf;
 use std::process::Command;
@@ -1119,14 +1121,19 @@ fn export_pdf(
     write_atomic(dest, pdf)
 }
 
+/// Runs the LaTeX engine in `dir`: the bundled tectonic, else one on PATH, else pdflatex.
 fn run_engine(dir: &PathBuf) -> Result<std::process::Output, String> {
-    let attempts: [(&str, &[&str]); 2] = [
-        ("tectonic", &["-X", "compile", "--keep-logs", "main.tex"]),
-        (
-            "pdflatex",
-            &["-interaction=nonstopmode", "-halt-on-error", "main.tex"],
-        ),
-    ];
+    latex::wait_for_setup(); // the first-run download may still be going
+    let tectonic_args: &[&str] = &["-X", "compile", "--keep-logs", "main.tex"];
+    let mut attempts: Vec<(PathBuf, &[&str])> = Vec::new();
+    if let Some(bundled) = latex::bundled_tectonic() {
+        attempts.push((bundled, tectonic_args));
+    }
+    attempts.push(("tectonic".into(), tectonic_args));
+    attempts.push((
+        "pdflatex".into(),
+        &["-interaction=nonstopmode", "-halt-on-error", "main.tex"],
+    ));
     for (bin, args) in attempts {
         match Command::new(bin).args(args).current_dir(dir).output() {
             Ok(out) => return Ok(out),
@@ -1134,7 +1141,7 @@ fn run_engine(dir: &PathBuf) -> Result<std::process::Output, String> {
             Err(e) => return Err(format!("{bin}: {e}")),
         }
     }
-    Err("No LaTeX engine found. Install tectonic (preferred) or a TeX Live with pdflatex.".into())
+    Err("No LaTeX engine found. Texture normally bundles tectonic; otherwise install tectonic or a TeX Live with pdflatex.".into())
 }
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
@@ -1183,7 +1190,10 @@ pub fn run() {
             set_api_key,
             has_api_key,
             test_api_key,
-            ocr_image
+            ocr_image,
+            latex::latex_setup_status,
+            latex::start_latex_setup,
+            latex::retry_latex_setup
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");

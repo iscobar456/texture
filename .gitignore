@@ -6,3 +6,6 @@ build/
 .env*
 !.env.example
 supabase/.temp/
+
+# tectonic sidecar, fetched by apps/desktop/scripts/fetch-tectonic.mjs
+apps/desktop/src-tauri/binaries/

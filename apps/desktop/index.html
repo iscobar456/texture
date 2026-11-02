@@ -262,6 +262,21 @@
         <p class="muted">Signed in as <span id="about-user"></span></p>
       </div>
     </dialog>
+    <dialog id="latex-dialog">
+      <div class="dlg-head">
+        <strong>Setting up LaTeX</strong>
+        <span class="spacer"></span>
+        <button type="button" class="cancel icon-btn" aria-label="Hide" title="Hide (Esc)"><svg viewBox="0 0 16 16" width="14" height="14" aria-hidden="true"><path d="M3.5 3.5l9 9M12.5 3.5l-9 9" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round"/></svg></button>
+      </div>
+      <div id="latex-body">
+        <p id="latex-msg"></p>
+        <progress id="latex-progress" hidden></progress>
+        <p id="latex-detail" class="muted" hidden></p>
+        <pre id="latex-error" hidden></pre>
+        <div class="row"><button type="button" id="latex-retry" hidden>Try again</button><button type="button" class="cancel">Hide</button></div>
+      </div>
+    </dialog>
+
 
     <dialog id="closing-dialog" data-persistent>
       <form method="dialog">

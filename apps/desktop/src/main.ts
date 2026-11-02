@@ -34,6 +34,9 @@ import { getVersion } from "@tauri-apps/api/app";
 import { initDialogs } from "./dialogs";
 import { kebab, type MenuItem } from "./popup";
 import { initInbox } from "./inbox";
+import { initLatexSetup, latexSetupRunning, startLatexSetup } from "./latex-setup";
+import { initPlacement } from "./placement";
+import { toast } from "./toast";
 import { initSwitcher, splitPath } from "./switcher";
 import { collectPending, initSyncUi, type Pending } from "./sync-ui";
 import { getCurrentWindow } from "@tauri-apps/api/window";
@@ -219,7 +222,7 @@ function renderBar() {
   if (bar.kind === "compiling") {
     const sp = document.createElement("span");
     sp.className = "spinner";
-    el.append(sp, "Compiling…");
+    el.append(sp, latexSetupRunning() ? "Setting up LaTeX (first run only)…" : "Compiling…");
   } else {
     el.append(bar.kind === "idle" ? "Not compiled yet" : bar.text);
     if (stale && bar.kind !== "idle") el.append(" · edited since");
@@ -413,6 +416,7 @@ const inbox = initInbox({
 });
 
 // ---- snippets: one user-owned TOML file (see default-snippets.toml) ----
+initLatexSetup(renderBar); // the compile bar says so when a compile is waiting on the first-run download
 const snippetsUi = initSnippetsUi({
   errors: () => snippetErrors,
   onEdit: () => void openSnippetsFile(),
@@ -1407,6 +1411,7 @@ async function start(userId: string) {
   api.onInboxChange(() => void inbox.refresh());
 }
 
+  await startLatexSetup(); // first run: downloads LaTeX support files, dialog shows progress
 async function initAuth() {
   const url = import.meta.env.VITE_SUPABASE_URL as string | undefined;
   const key = import.meta.env.VITE_SUPABASE_ANON_KEY as string | undefined;
