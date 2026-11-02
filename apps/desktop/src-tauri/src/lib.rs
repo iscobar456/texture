@@ -431,7 +431,7 @@ fn read_template_preview(app: tauri::AppHandle, user: String, name: String) -> R
 }
 
 /// Compiles a stored template in its own scratch folder (so it never collides with the editor's) and returns the PDF.
-#[tauri::command]
+#[tauri::command(async)]
 fn compile_template_preview(app: tauri::AppHandle, user: String, name: String) -> Result<Response, String> {
     let source = read_template(app.clone(), user.clone(), name)?;
     build_pdf(&app, &user, "", &source, Some(".scratch-thumbs")).map(Response::new)
@@ -1096,7 +1096,7 @@ fn build_pdf(
     fs::read(dir.join("main.pdf")).map_err(|e| e.to_string())
 }
 
-#[tauri::command]
+#[tauri::command(async)]
 fn compile(
     app: tauri::AppHandle,
     user: String,
@@ -1108,7 +1108,7 @@ fn compile(
 }
 
 /// Compiles and writes the PDF to `dest`, a location the user picked. This is the only way a PDF leaves the app.
-#[tauri::command]
+#[tauri::command(async)]
 fn export_pdf(
     app: tauri::AppHandle,
     user: String,
@@ -1135,10 +1135,14 @@ fn run_engine(dir: &PathBuf) -> Result<std::process::Output, String> {
         &["-interaction=nonstopmode", "-halt-on-error", "main.tex"],
     ));
     for (bin, args) in attempts {
-        match Command::new(bin).args(args).current_dir(dir).output() {
+        let mut cmd = Command::new(&bin);
+        cmd.args(args).current_dir(dir);
+        #[cfg(windows)]
+        std::os::windows::process::CommandExt::creation_flags(&mut cmd, 0x0800_0000); // no console window
+        match cmd.output() {
             Ok(out) => return Ok(out),
             Err(e) if e.kind() == std::io::ErrorKind::NotFound => continue,
-            Err(e) => return Err(format!("{bin}: {e}")),
+            Err(e) => return Err(format!("{}: {e}", bin.display())),
         }
     }
     Err("No LaTeX engine found. Texture normally bundles tectonic; otherwise install tectonic or a TeX Live with pdflatex.".into())

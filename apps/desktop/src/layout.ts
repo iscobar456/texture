@@ -3,7 +3,7 @@
 
 import { getCurrentWindow } from "@tauri-apps/api/window";
 
-const KEY = "hwscan:layout";
+const KEY = "texture:layout";
 const INBOX_DEFAULT = 260;
 const INBOX_MIN = 200;
 const INBOX_MAX = 520;

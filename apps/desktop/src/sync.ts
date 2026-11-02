@@ -1,5 +1,5 @@
 import { invoke } from "@tauri-apps/api/core";
-import type { createApi, DocKind, RemoteDoc } from "@hwscan/api";
+import type { createApi, DocKind, RemoteDoc } from "@texture/api";
 
 type Api = ReturnType<typeof createApi>;
 type LocalDoc = {

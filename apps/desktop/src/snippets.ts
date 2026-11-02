@@ -207,7 +207,7 @@ export function browseGroups(cfg: Config): BrowseGroup[] {
 // ---- one-time migration of the old per-device snippets ----
 
 type LegacySnippet = { trigger?: string; description?: string; shortcut?: string; body?: string };
-const LEGACY_KEY = "hwscan:snippets";
+const LEGACY_KEY = "texture:snippets";
 
 const tomlString = (s: string) =>
   !s.includes("'") && !s.includes("\n") ? `'${s}'` : !s.includes("'''") ? `'''\n${s}'''` : JSON.stringify(s);

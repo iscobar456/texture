@@ -1,5 +1,6 @@
+import { PHOTO_MIME } from "./placement";
 import { invoke } from "@tauri-apps/api/core";
-import type { createApi, Photo } from "@hwscan/api";
+import type { createApi, Photo } from "@texture/api";
 import { attachMenu } from "./popup";
 import { toast } from "./toast";
 import { OCR_MODELS, type Settings } from "./settings";
@@ -14,7 +15,9 @@ export type InboxDeps = {
   settings: () => Settings;
   /** Where a photo would go: the open document's path, or null when a template or the snippets file is open. */
   target: () => string | null;
-  insertAtCursor: (text: string) => void;
+  /** Place mode: resolves to a document offset the user chose for `what` ("photo", "transcription"), or null if cancelled. */
+  pickInsertPoint: (what: string) => Promise<number | null>;
+  insertAt: (pos: number, text: string) => void;
   status: (msg: string) => void;
   /** Opens the app's delete confirmation for a photo. */
   askDelete: (p: Photo) => void;
@@ -289,6 +292,14 @@ export function initInbox(deps: InboxDeps) {
       imgBtn.addEventListener("click", () => openViewer(kind, index));
     }
     lazy.observe(img);
+    if (kind !== "trash") {
+      img.draggable = false; // drag the whole card, not the bare image
+      el.draggable = true;
+      el.addEventListener("dragstart", (e) => {
+        e.dataTransfer?.setData(PHOTO_MIME, p.id);
+        if (e.dataTransfer) e.dataTransfer.effectAllowed = "copy";
+      });
+    }
 
     const when = document.createElement("div");
     when.className = "photo-meta";
@@ -317,7 +328,7 @@ export function initInbox(deps: InboxDeps) {
         { label: "Move to trash", danger: true, run: () => void trash(p) },
       ]);
       actions.append(
-        button(kind === "used" ? "Insert again" : "Insert", "Insert the photo into the document at the cursor", async () => insertPhoto(p), ""),
+        button(kind === "used" ? "Insert again" : "Insert", "Insert the photo into the document at the cursor", async () => chooseAndInsert(p), ""),
         button("OCR…", "Transcribe the handwriting to LaTeX and review it first", async () => openOcr(p), ""),
         more,
       );
@@ -387,10 +398,25 @@ export function initInbox(deps: InboxDeps) {
     return `\\begin{center}\n\\includegraphics[width=0.8\\linewidth]{${rel}}\n\\end{center}\n`;
   }
 
-  async function insertPhoto(p: Photo, deg = 0) {
-    deps.insertAtCursor(await placeImage(p, deg));
+  async function insertPhoto(p: Photo, deg: number, pos: number) {
+    deps.insertAt(pos, await placeImage(p, deg));
     await deps.api().markImported(p.id);
     await refresh();
+  }
+
+  /** Insert / Insert again: choose the spot first, then insert there. */
+  async function chooseAndInsert(p: Photo, deg = 0) {
+    if (deps.target() === null) throw new Error("Open a document to insert photos");
+    if (viewer.open) viewer.close(); // the editor has to be visible to pick a spot
+    const pos = await deps.pickInsertPoint("photo");
+    if (pos !== null) await insertPhoto(p, deg, pos);
+  }
+
+  /** A card was dragged onto the editor. */
+  async function dropPhoto(id: string, pos: number) {
+    const p = findPhoto(id);
+    if (!p || p.status === "trashed") return;
+    try { await insertPhoto(p, 0, pos); } catch (e) { deps.status(String((e as Error)?.message ?? e)); }
   }
 
   // ---- the viewer ----
@@ -486,8 +512,7 @@ export function initInbox(deps: InboxDeps) {
     const p = current();
     if (!p) return;
     try {
-      await insertPhoto(p, vDeg);
-      if (viewer.open) viewer.close();
+      await chooseAndInsert(p, vDeg);
     } catch (e) {
       deps.status(String((e as Error)?.message ?? e));
     }
@@ -552,15 +577,10 @@ export function initInbox(deps: InboxDeps) {
   const ocrRetry = $<HTMLButtonElement>("ocr-retry");
   const ocrWithImage = $<HTMLInputElement>("ocr-with-image");
   let ocrPhoto: Photo | null = null;
+  let ocrPos = 0; // where the transcription goes, chosen before the dialog opened
   let ocrDeg = 0;
   let ocrRun = 0;
   let ocrUrl = "";
-
-  function cost(inTok: number, outTok: number): string {
-    const m = OCR_MODELS.find(([v]) => v === deps.settings().ocrModel)!;
-    const dollars = (inTok * m[2] + outTok * m[3]) / 1_000_000;
-    return dollars < 0.01 ? `about ${(dollars * 100).toFixed(2)}¢` : `about $${dollars.toFixed(3)}`;
-  }
 
   function setOcrState(text: string, kind: "busy" | "ok" | "error" | "info") {
     ocrState.className = `ocr-state ${kind}`;
@@ -575,6 +595,10 @@ export function initInbox(deps: InboxDeps) {
 
   async function openOcr(p: Photo, deg = 0) {
     if (deps.target() === null) throw new Error("Open a document to insert the transcription");
+    if (viewer.open) viewer.close(); // the editor has to be visible to pick a spot
+    const pos = await deps.pickInsertPoint("transcription");
+    if (pos === null) return; // cancelled before anything was billed
+    ocrPos = pos;
     ocrPhoto = p;
     ocrDeg = deg;
     ocrText.value = "";
@@ -628,7 +652,7 @@ export function initInbox(deps: InboxDeps) {
       ocrText.value = r.latex;
       void rememberOcr(p, r.latex);
       const cut = r.stop_reason === "max_tokens" ? " The output was cut off; consider transcribing a smaller part." : "";
-      setOcrState(`Done · ${r.input_tokens} in / ${r.output_tokens} out · ${cost(r.input_tokens, r.output_tokens)}.${cut} Check it against the photo, then insert.`, cut ? "error" : "ok");
+      setOcrState(`Done.${cut} Check it against the photo, then insert.`, cut ? "error" : "ok");
       ocrInsert.disabled = false;
       ocrText.focus();
     } catch (e) {
@@ -646,12 +670,10 @@ export function initInbox(deps: InboxDeps) {
     ocrInsert.disabled = true;
     try {
       const image = ocrWithImage.checked ? `${await placeImage(p, ocrDeg)}\n` : "";
-      deps.insertAtCursor(`${image}${text}\n`);
       await rememberOcr(p, text); // keeps any edits you made
       await deps.api().markImported(p.id);
-      ocrDialog.close();
-      if (viewer.open) viewer.close();
-      deps.status("Transcription inserted");
+      ocrDialog.close(); // before inserting, so the Undo toast is clickable
+      deps.insertAt(ocrPos, `${image}${text}\n`);
       await refresh();
     } catch (e) {
       setOcrState(String((e as Error)?.message ?? e), "error");
@@ -676,5 +698,5 @@ export function initInbox(deps: InboxDeps) {
     ocrImg.removeAttribute("src");
   });
 
-  return { refresh };
+  return { refresh, dropPhoto };
 }

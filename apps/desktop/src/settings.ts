@@ -49,7 +49,7 @@ export const DEFAULTS: Settings = {
 };
 
 // Per-device on purpose: font size and theme depend on the screen in front of you.
-const KEY = "hwscan:settings";
+const KEY = "texture:settings";
 
 const pick = <T extends string>(v: unknown, allowed: readonly T[], fallback: T): T =>
   allowed.includes(v as T) ? (v as T) : fallback;

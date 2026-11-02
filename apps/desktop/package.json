@@ -1,5 +1,5 @@
 {
-  "name": "@hwscan/desktop",
+  "name": "@texture/desktop",
   "private": true,
   "version": "0.1.0",
   "type": "module",
@@ -16,7 +16,7 @@
     "@codemirror/legacy-modes": "^6.5.5",
     "@codemirror/state": "^6.7.6",
     "@codemirror/view": "^6.43.15",
-    "@hwscan/api": "*",
+    "@texture/api": "*",
     "@lezer/highlight": "^1.2.5",
     "@replit/codemirror-vim": "^6.4.0",
     "@tauri-apps/api": "^2",

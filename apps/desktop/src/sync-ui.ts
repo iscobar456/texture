@@ -77,7 +77,7 @@ export function initSyncUi(opts: {
   let lastOk: Date | null = null;
   let failure = "";
 
-  const lastKey = () => `hwscan:lastsync:${opts.user()}`;
+  const lastKey = () => `texture:lastsync:${opts.user()}`;
 
   function loadLast() {
     try {

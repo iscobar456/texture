@@ -7,10 +7,10 @@ import { StreamLanguage, syntaxHighlighting } from "@codemirror/language";
 import { vim, Vim } from "@replit/codemirror-vim";
 import { softTheme, softHighlight } from "./theme";
 import { stex } from "@codemirror/legacy-modes/mode/stex";
-import { indentWithTab } from "@codemirror/commands";
+import { indentWithTab, undo } from "@codemirror/commands";
 import * as pdfjs from "pdfjs-dist";
 import workerUrl from "pdfjs-dist/build/pdf.worker.min.mjs?url";
-import { createApi, type Photo } from "@hwscan/api";
+import { createApi, type Photo } from "@texture/api";
 import { runSync } from "./sync";
 import { EditorState } from "@codemirror/state";
 import { latexSource, showKey, snippetKeymap } from "./completions";
@@ -155,6 +155,7 @@ function createEditor(doc: string) {
       }),
     ],
   });
+  placement.attachDrop(view);
 }
 
 function setDoc(text: string) {
@@ -193,10 +194,22 @@ $("format-doc").addEventListener("click", formatDocument);
 Vim.defineEx("write", "w", () => void compile());
 Vim.defineEx("fmt", "fmt", () => formatDocument());
 
-function insertAtCursor(text: string) {
-  const { from, to } = view!.state.selection.main;
-  view!.dispatch({ changes: { from, to, insert: text }, selection: { anchor: from + text.length } });
-  view!.focus();
+const placement = initPlacement(() => view, { onDrop: (id, pos) => void inbox.dropPhoto(id, pos) });
+
+/** Inserts whole lines at a line boundary (see placement.ts), scrolls there and offers Undo. */
+function insertAt(pos: number, text: string) {
+  const v = view!;
+  const at = Math.min(pos, v.state.doc.length);
+  // At the very end of a file that lacks a final newline, start on a fresh line.
+  const lead = at === v.state.doc.length && at > 0 && v.state.sliceDoc(at - 1, at) !== "\n" ? "\n" : "";
+  const insert = lead + text;
+  v.dispatch({
+    changes: { from: at, insert },
+    selection: { anchor: at + insert.length },
+    effects: EditorView.scrollIntoView(at + lead.length, { y: "center" }),
+  });
+  v.focus();
+  toast(`Inserted at line ${v.state.doc.lineAt(at + lead.length).number}`, { actionLabel: "Undo", onAction: () => { undo(v); v.focus(); }, ms: 8000 });
 }
 
 // ---- compile + preview ----
@@ -403,20 +416,21 @@ $("export-pdf").addEventListener("click", async () => {
 
 initShortcutsUi(() => settings.editing === "vim");
 initDialogs(() => view?.focus());
+initLatexSetup(renderBar); // the compile bar says so when a compile is waiting on the first-run download
 const layout = initLayout();
 const inbox = initInbox({
   api: () => api,
   user: () => user,
   settings: () => settings,
   target: () => (templateName !== null || snippetsOpen ? null : docPath),
-  insertAtCursor: (text) => insertAtCursor(text),
+  pickInsertPoint: (what) => placement.pick(what),
+  insertAt,
   status,
   askDelete: (p) => askDeletePhoto(p),
   onCount: (n) => layout.setInboxCount(n),
 });
 
 // ---- snippets: one user-owned TOML file (see default-snippets.toml) ----
-initLatexSetup(renderBar); // the compile bar says so when a compile is waiting on the first-run download
 const snippetsUi = initSnippetsUi({
   errors: () => snippetErrors,
   onEdit: () => void openSnippetsFile(),
@@ -731,7 +745,7 @@ $("open-about").addEventListener("click", async () => {
 });
 
 // ---- documents, folders, templates ----
-const lastKey = () => `hwscan:last:${user}`;
+const lastKey = () => `texture:last:${user}`;
 const parentOf = (path: string) => path.slice(0, Math.max(path.lastIndexOf("/"), 0));
 const baseOf = (path: string) => path.slice(path.lastIndexOf("/") + 1);
 
@@ -743,7 +757,7 @@ function setDocLabel(dir: string, name: string, full = dir + name) {
 }
 
 // Most recently opened documents, newest first, kept per account on this device.
-const recentKey = () => `hwscan:recent:${user}`;
+const recentKey = () => `texture:recent:${user}`;
 function recents(): string[] {
   try {
     const v = JSON.parse(localStorage.getItem(recentKey()) ?? "[]");
@@ -1397,6 +1411,7 @@ async function start(userId: string) {
   $("app").hidden = false;
 
   syncUi.start();
+  await startLatexSetup(); // first run: downloads LaTeX support files, dialog shows progress
   // Pull first on a fresh device so we don't invent a document that the server already has.
   await doSync();
   await initSnippets();
@@ -1411,7 +1426,6 @@ async function start(userId: string) {
   api.onInboxChange(() => void inbox.refresh());
 }
 
-  await startLatexSetup(); // first run: downloads LaTeX support files, dialog shows progress
 async function initAuth() {
   const url = import.meta.env.VITE_SUPABASE_URL as string | undefined;
   const key = import.meta.env.VITE_SUPABASE_ANON_KEY as string | undefined;
