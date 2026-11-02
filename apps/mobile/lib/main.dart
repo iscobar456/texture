@@ -11,13 +11,13 @@ const _anonKey = String.fromEnvironment('SUPABASE_ANON_KEY');
 Future<void> main() async {
   WidgetsFlutterBinding.ensureInitialized();
   await Supabase.initialize(url: _url, publishableKey: _anonKey);
-  runApp(const HwscanApp());
+  runApp(const TextureApp());
 }
 
 final _navigatorKey = GlobalKey<NavigatorState>();
 
-class HwscanApp extends StatelessWidget {
-  const HwscanApp({super.key});
+class TextureApp extends StatelessWidget {
+  const TextureApp({super.key});
 
   @override
   Widget build(BuildContext context) => MaterialApp(

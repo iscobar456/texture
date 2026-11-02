@@ -1,4 +1,4 @@
-package dev.hwscan.hwscan_mobile
+package dev.texture.texture_mobile
 
 import io.flutter.embedding.android.FlutterActivity
 

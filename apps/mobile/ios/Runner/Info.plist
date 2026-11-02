@@ -7,7 +7,7 @@
 		<dict>
 			<key>CFBundleURLSchemes</key>
 			<array>
-				<string>dev.hwscan.mobile</string>
+				<string>dev.texture.mobile</string>
 			</array>
 		</dict>
 	</array>
@@ -24,7 +24,7 @@
 	<key>CFBundleInfoDictionaryVersion</key>
 	<string>6.0</string>
 	<key>CFBundleName</key>
-	<string>hwscan_mobile</string>
+	<string>texture_mobile</string>
 	<key>CFBundlePackageType</key>
 	<string>APPL</string>
 	<key>CFBundleShortVersionString</key>

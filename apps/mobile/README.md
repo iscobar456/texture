@@ -1,4 +1,4 @@
-# hwscan_mobile
+# texture_mobile
 
 A new Flutter project.
 

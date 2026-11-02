@@ -4,6 +4,7 @@ import 'package:flutter/material.dart';
 import 'package:image_picker/image_picker.dart';
 
 import 'auth_errors.dart';
+import 'edit_photo_page.dart';
 import 'supabase.dart';
 
 enum _State { uploading, sent, failed }
@@ -73,8 +74,12 @@ class _CapturePageState extends State<CapturePage> {
 
   Future<void> _pick(ImageSource source) async {
     final f = await _picker.pickImage(source: source);
-    if (f == null) return;
-    final u = _Upload(f);
+    if (f == null || !mounted) return;
+    final edited = await Navigator.of(context).push<String>(
+      MaterialPageRoute(builder: (_) => EditPhotoPage(path: f.path)),
+    );
+    if (edited == null) return; // cancelled
+    final u = _Upload(XFile(edited));
     setState(() => _uploads.insert(0, u));
     await _upload(u);
   }
