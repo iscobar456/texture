@@ -128,7 +128,7 @@ function createEditor(doc: string) {
       // Listed before vim() so Ctrl+Enter still wins over its key handling.
       Prec.highest(keymap.of([
         { key: "Mod-Enter", run: () => (void compile(), true) },
-        { key: "Mod-Shift-f", run: () => (formatDocument(), true), preventDefault: true },
+        { key: "Mod-Shift-f", run: () => (void formatDocument(), true), preventDefault: true },
       ])),
       snippetSlot.of(snippetKeys()), // before vim(), at the same precedence, so it wins
       vimSlot.of(settings.editing === "vim" ? vim() : []),
@@ -178,21 +178,24 @@ function applySettings() {
   });
 }
 
-/** Re-indents the LaTeX and tidies whitespace. One undo step; refuses (and says why) if the text does not balance. */
-function formatDocument() {
+/** Formats the LaTeX with tex-fmt. One undo step; refuses (and says why) if the text does not balance. */
+async function formatDocument() {
   if (!view) return;
   if (snippetsOpen) return void editorNote("Format is for LaTeX; the snippets file is TOML");
-  const r = formatDoc(view.state.doc);
+  const target = view;
+  const startDoc = target.state.doc;
+  const r = await formatDoc(startDoc, { wrap: settings.formatWrap, wrapLen: settings.formatWrapLen, indent: settings.formatIndent });
   if (!r.ok) return void editorNote(`Can't format: ${r.error}`);
+  if (target.state.doc !== startDoc) return void editorNote("Edited while formatting; try again"); // the edits no longer line up
   if (!r.edits.length) return void editorNote("Already formatted");
-  view.dispatch({ changes: r.edits, userEvent: "format" });
+  target.dispatch({ changes: r.edits, userEvent: "format" });
   editorNote(`Formatted: ${r.changedLines} line${r.changedLines === 1 ? "" : "s"} changed (Ctrl+Z undoes it)`);
 }
 $("format-doc").addEventListener("click", formatDocument);
 
 // :w saves and compiles
 Vim.defineEx("write", "w", () => void compile());
-Vim.defineEx("fmt", "fmt", () => formatDocument());
+Vim.defineEx("fmt", "fmt", () => void formatDocument());
 
 const placement = initPlacement(() => view, { onDrop: (id, pos) => void inbox.dropPhoto(id, pos) });
 
@@ -526,6 +529,9 @@ const field = {
   font: $<HTMLInputElement>("set-font"),
   wrap: $<HTMLInputElement>("set-wrap"),
   linenos: $<HTMLInputElement>("set-linenos"),
+  fmtIndent: $<HTMLSelectElement>("set-fmt-indent"),
+  fmtWrap: $<HTMLInputElement>("set-fmt-wrap"),
+  fmtLen: $<HTMLInputElement>("set-fmt-len"),
   auto: $<HTMLInputElement>("set-auto"),
   template: $<HTMLSelectElement>("set-template"),
   ocrModel: $<HTMLSelectElement>("set-ocr-model"),
@@ -539,6 +545,10 @@ function showSettings() {
   field.font.value = String(settings.fontSize);
   field.wrap.checked = settings.wrap;
   field.linenos.checked = settings.lineNumbers;
+  field.fmtIndent.value = settings.formatIndent;
+  field.fmtWrap.checked = settings.formatWrap;
+  field.fmtLen.value = String(settings.formatWrapLen);
+  field.fmtLen.disabled = !settings.formatWrap;
   field.auto.checked = settings.autoCompile;
 }
 
@@ -633,10 +643,14 @@ function readSettings() {
     fontSize: Number.isFinite(size) && size >= 10 && size <= 28 ? Math.round(size) : settings.fontSize,
     wrap: field.wrap.checked,
     lineNumbers: field.linenos.checked,
+    formatIndent: field.fmtIndent.value as Settings["formatIndent"],
+    formatWrap: field.fmtWrap.checked,
+    formatWrapLen: Number.isFinite(Number(field.fmtLen.value)) && Number(field.fmtLen.value) >= 20 && Number(field.fmtLen.value) <= 300 ? Math.round(Number(field.fmtLen.value)) : settings.formatWrapLen,
     autoCompile: field.auto.checked,
     defaultTemplate: field.template.value || settings.defaultTemplate,
     ocrModel: field.ocrModel.value as Settings["ocrModel"],
   };
+  field.fmtLen.disabled = !field.fmtWrap.checked;
   saveSettings(settings);
   applySettings();
 }

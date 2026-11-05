@@ -34,6 +34,10 @@ export type Settings = {
   /** Pre-selected template in the New document dialog. */
   defaultTemplate: string;
   ocrModel: OcrModel;
+  /** Format document (tex-fmt): break long lines, where, and how deep to indent. */
+  formatWrap: boolean;
+  formatWrapLen: number;
+  formatIndent: "2" | "4" | "tab";
 };
 
 export const DEFAULTS: Settings = {
@@ -46,6 +50,9 @@ export const DEFAULTS: Settings = {
   autoCompile: false,
   defaultTemplate: "Homework",
   ocrModel: "claude-sonnet-5-5",
+  formatWrap: false,
+  formatWrapLen: 80,
+  formatIndent: "2",
 };
 
 // Per-device on purpose: font size and theme depend on the screen in front of you.
@@ -71,6 +78,9 @@ export function loadSettings(): Settings {
     lineNumbers: typeof raw.lineNumbers === "boolean" ? raw.lineNumbers : DEFAULTS.lineNumbers,
     autoCompile: typeof raw.autoCompile === "boolean" ? raw.autoCompile : DEFAULTS.autoCompile,
     ocrModel: pick(raw.ocrModel, OCR_MODELS.map(([v]) => v), DEFAULTS.ocrModel),
+    formatWrap: typeof raw.formatWrap === "boolean" ? raw.formatWrap : DEFAULTS.formatWrap,
+    formatWrapLen: Number.isFinite(Number(raw.formatWrapLen)) ? Math.min(300, Math.max(20, Math.round(Number(raw.formatWrapLen)))) : DEFAULTS.formatWrapLen,
+    formatIndent: pick(raw.formatIndent, ["2", "4", "tab"] as const, DEFAULTS.formatIndent),
     defaultTemplate: typeof raw.defaultTemplate === "string" ? raw.defaultTemplate : DEFAULTS.defaultTemplate,
   };
 }

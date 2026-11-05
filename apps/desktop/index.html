@@ -150,6 +150,18 @@
           <label><input type="checkbox" id="set-linenos" /> Show line numbers</label>
         </fieldset>
         <fieldset>
+          <legend>Format document</legend>
+          <label>Indent with
+            <select id="set-fmt-indent">
+              <option value="2">2 spaces</option>
+              <option value="4">4 spaces</option>
+              <option value="tab">Tabs</option>
+            </select>
+          </label>
+          <label><input type="checkbox" id="set-fmt-wrap" /> Break long lines</label>
+          <label>Break lines longer than <input id="set-fmt-len" type="number" min="20" max="300" step="1" /> characters</label>
+        </fieldset>
+        <fieldset>
           <legend>Compiling</legend>
           <label><input type="checkbox" id="set-auto" /> Compile automatically when I stop typing</label>
         </fieldset>
