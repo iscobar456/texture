@@ -75,14 +75,21 @@ jobs:
       - name: Write the signing key
         # Secrets: ANDROID_KEYSTORE_BASE64 (base64 of the .jks), ANDROID_KEYSTORE_PASSWORD, ANDROID_KEY_ALIAS,
         # ANDROID_KEY_PASSWORD. Keep the same keystore forever: phones refuse updates signed with a different key.
+        env:
+          KEYSTORE_BASE64: ${{ secrets.ANDROID_KEYSTORE_BASE64 }}
+          STORE_PASSWORD: ${{ secrets.ANDROID_KEYSTORE_PASSWORD }}
+          KEY_ALIAS: ${{ secrets.ANDROID_KEY_ALIAS }}
+          KEY_PASSWORD: ${{ secrets.ANDROID_KEY_PASSWORD }}
         run: |
-          echo "${{ secrets.ANDROID_KEYSTORE_BASE64 }}" | base64 -d > apps/mobile/android/release.jks
-          cat > apps/mobile/android/key.properties <<EOF
-          storeFile=release.jks
-          storePassword=${{ secrets.ANDROID_KEYSTORE_PASSWORD }}
-          keyAlias=${{ secrets.ANDROID_KEY_ALIAS }}
-          keyPassword=${{ secrets.ANDROID_KEY_PASSWORD }}
-          EOF
+          # Tolerate line breaks, spaces and quotes that crept in when the secret was pasted.
+          printf '%s' "$KEYSTORE_BASE64" | tr -d ' \r\n\t"' | base64 -d > apps/mobile/android/release.jks
+          keytool -list -keystore apps/mobile/android/release.jks -storepass "$STORE_PASSWORD" -alias "$KEY_ALIAS" > /dev/null
+          {
+            echo "storeFile=release.jks"
+            echo "storePassword=$STORE_PASSWORD"
+            echo "keyAlias=$KEY_ALIAS"
+            echo "keyPassword=$KEY_PASSWORD"
+          } > apps/mobile/android/key.properties
       - run: flutter pub get
         working-directory: apps/mobile
       - name: Build APK

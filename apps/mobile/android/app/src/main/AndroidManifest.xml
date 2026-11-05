@@ -1,4 +1,6 @@
 <manifest xmlns:android="http://schemas.android.com/apk/res/android">
+    <!-- Without this, release builds cannot reach the network (debug and profile manifests add it for development). -->
+    <uses-permission android:name="android.permission.INTERNET"/>
     <application
         android:label="Texture"
         android:name="${applicationName}"
