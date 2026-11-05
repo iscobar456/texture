@@ -9,7 +9,7 @@ export const PHOTO_MIME = "application/x-texture-photo";
  * Insertion points are always line boundaries, never mid-line: "boundary b" means "before line b", and
  * boundary lines+1 is the end of the document. Hovering the top half of a line chooses the boundary above it,
  * the bottom half the one below, and a thin marker line shows the choice. Two ways in:
- *  - `pick()`: place mode, started by Insert / OCR… (click a spot, or ↑/↓ + Enter, Esc cancels);
+ *  - `pick()`: place mode, started by Insert / Transcribe (click a spot, or ↑/↓ + Enter, Esc cancels);
  *  - dropping a dragged inbox card onto the editor, which calls `onDrop`.
  */
 export function initPlacement(

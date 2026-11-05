@@ -59,6 +59,9 @@
             <svg class="icon-expand" viewBox="0 0 16 16" width="16" height="16" aria-hidden="true"><path d="M2 6V2h4M10 2h4v4M14 10v4h-4M6 14H2v-4" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"/></svg>
             <svg class="icon-compress" viewBox="0 0 16 16" width="16" height="16" aria-hidden="true"><path d="M6 2v4H2M14 6h-4V2M10 14v-4h4M2 10h4v4" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"/></svg>
           </button>
+            <button id="preview-export" class="preview-full" title="Export PDF…" aria-label="Export PDF">
+              <svg viewBox="0 0 16 16" width="16" height="16" aria-hidden="true"><path d="M8 2v8M4.5 6.8L8 10.3l3.5-3.5M2.5 13.5h11" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"/></svg>
+            </button>
             <div id="pages"></div><pre id="log" hidden></pre>
           </div>
           <div id="compile-bar" role="status" aria-live="polite">
@@ -69,13 +72,19 @@
         <div id="splitter2" class="splitter" role="separator" aria-orientation="vertical" aria-label="Resize photo inbox"
              tabindex="0" title="Drag to resize (double-click to reset)"></div>
         <aside id="inbox">
-          <button id="inbox-toggle" class="inbox-toggle" aria-expanded="true" title="Minimize the photo inbox">
-            <svg class="inbox-icon" viewBox="0 0 16 16" width="16" height="16" aria-hidden="true"><rect x="2" y="2.5" width="12" height="11" rx="2" fill="none" stroke="currentColor" stroke-width="1.4"/><circle cx="5.8" cy="6.2" r="1.1" fill="currentColor"/><path d="M2.6 11.6l3.1-3 2.6 2.4 2-1.8 3.1 2.8" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linecap="round" stroke-linejoin="round"/></svg>
-            <span class="label">Photo inbox</span>
-            <span id="inbox-count" class="badge" hidden></span>
-            <svg id="inbox-chevron" class="chev" viewBox="0 0 16 16" width="14" height="14" aria-hidden="true"><path d="M6 3.5L10.5 8 6 12.5" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/></svg>
-          </button>
-          <div id="inbox-list"></div>
+          <div class="inbox-head">
+            <button id="inbox-toggle" class="inbox-toggle" aria-expanded="true" title="Minimize the photo inbox">
+              <svg class="inbox-icon" viewBox="0 0 16 16" width="16" height="16" aria-hidden="true"><rect x="2" y="2.5" width="12" height="11" rx="2" fill="none" stroke="currentColor" stroke-width="1.4"/><circle cx="5.8" cy="6.2" r="1.1" fill="currentColor"/><path d="M2.6 11.6l3.1-3 2.6 2.4 2-1.8 3.1 2.8" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linecap="round" stroke-linejoin="round"/></svg>
+              <span class="label">Photo inbox</span>
+              <span id="inbox-count" class="badge" hidden></span>
+              <svg id="inbox-chevron" class="chev" viewBox="0 0 16 16" width="14" height="14" aria-hidden="true"><path d="M6 3.5L10.5 8 6 12.5" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/></svg>
+            </button>
+            <button id="inbox-refresh" class="icon-btn" title="Refresh the photo inbox" aria-label="Refresh the photo inbox">
+              <svg viewBox="0 0 16 16" width="14" height="14" aria-hidden="true"><path d="M13 8a5 5 0 1 1-1.6-3.7M13 2.5v3h-3" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/></svg>
+            </button>
+          </div>
+          <div id="inbox-tabs" role="tablist" aria-label="Photo lists"></div>
+          <div id="inbox-list" role="tabpanel"></div>
         </aside>
       </main>
     </div>
@@ -201,7 +210,7 @@
           <button type="button" class="icon-btn" id="viewer-zoom-in" aria-label="Zoom in" title="Zoom in (+)">+</button>
         </div>
         <span class="spacer"></span>
-        <button type="button" id="viewer-ocr">OCR…</button>
+        <button type="button" id="viewer-ocr">Transcribe</button>
         <button type="button" id="viewer-insert" class="primary">Insert</button>
         <button type="button" class="icon-btn" id="viewer-delete" aria-label="Delete photo" title="Delete photo"><svg viewBox="0 0 16 16" width="16" height="16" aria-hidden="true"><path d="M3 4.5h10M6.5 4.5V3h3v1.5M4.5 4.5l.6 8.5h5.8l.6-8.5M7 7v4M9 7v4" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linecap="round" stroke-linejoin="round"/></svg></button>
         <button type="button" class="cancel icon-btn" aria-label="Close" title="Close (Esc)"><svg viewBox="0 0 16 16" width="14" height="14" aria-hidden="true"><path d="M3.5 3.5l9 9M12.5 3.5l-9 9" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round"/></svg></button>
@@ -230,6 +239,24 @@
         <span class="spacer"></span>
         <button type="button" class="cancel">Cancel</button>
         <button type="button" id="ocr-insert" class="primary" disabled>Insert</button>
+      </div>
+    </dialog>
+
+    <dialog id="obatch-dialog">
+      <div class="dlg-head">
+        <strong id="obatch-title">Transcribe photos</strong>
+        <span id="obatch-model" class="muted"></span>
+        <span class="spacer"></span>
+        <button type="button" class="cancel icon-btn" aria-label="Close" title="Close (Esc)"><svg viewBox="0 0 16 16" width="14" height="14" aria-hidden="true"><path d="M3.5 3.5l9 9M12.5 3.5l-9 9" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round"/></svg></button>
+      </div>
+      <div id="obatch-note" class="ocr-state"></div>
+      <div id="obatch-list"></div>
+      <div class="row ocr-foot">
+        <label class="check"><input type="checkbox" id="obatch-with-image" /> Also insert each photo above its text</label>
+        <span class="spacer"></span>
+        <button type="button" class="cancel">Cancel</button>
+        <button type="button" id="obatch-start" class="primary">Transcribe</button>
+        <button type="button" id="obatch-insert" class="primary" disabled>Insert</button>
       </div>
     </dialog>
 

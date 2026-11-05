@@ -116,14 +116,17 @@ export function initSyncUi(opts: {
       return el;
     };
 
+    const when = lastOk ? `synced ${ago(lastOk)}` : "not synced yet on this device";
+    const n = pending.items.length;
     const state =
       phase === "syncing" ? "Syncing now…"
-      : phase === "offline" ? "You appear to be offline. Everything you do is saved on this device and will upload when you're back online."
-      : phase === "failed" ? `The last sync could not finish: ${failure || "unknown error"}`
-      : errors.length ? "The last sync finished, but some items had problems (below)."
-      : "Everything that has been uploaded is up to date.";
-    add("p", state);
-    add("p", lastOk ? `Last successful sync: ${lastOk.toLocaleString([], { dateStyle: "medium", timeStyle: "short" })} (${ago(lastOk)})` : "No successful sync yet on this device.", "muted");
+      : phase === "offline" ? "Offline. Changes are saved here and upload when you're back."
+      : phase === "failed" ? `Sync failed: ${failure || "unknown error"}`
+      : errors.length ? `Some items had problems · ${when}`
+      : n ? `${n} ${n === 1 ? "change" : "changes"} waiting · ${when}`
+      : `Up to date · ${when}`;
+    const head = add("p", state, "sync-state");
+    if (lastOk) head.title = lastOk.toLocaleString([], { dateStyle: "medium", timeStyle: "short" });
 
     if (errors.length) {
       add("h4", `Problems (${errors.length})`);
@@ -132,11 +135,10 @@ export function initSyncUi(opts: {
     }
     if (conflicts.length) {
       add("h4", "Edited on two devices");
-      add("p", `The other device's version was kept as: ${conflicts.map((c) => `"${c}"`).join(", ")}.`, "muted");
+      add("p", `Kept both versions: ${conflicts.map((c) => `"${c}"`).join(", ")}.`, "muted");
     }
 
-    add("h4", `Waiting to upload (${pending.items.length})`);
-    if (!pending.items.length) add("p", "Nothing.", "muted");
+    if (pending.items.length) add("h4", `Waiting to upload (${pending.items.length})`);
     const groups = new Map<string, string[]>();
     for (const it of pending.items) groups.set(it.group, [...(groups.get(it.group) ?? []), it.label]);
     for (const [g, labels] of groups) {
@@ -161,7 +163,6 @@ export function initSyncUi(opts: {
       li.append(ul);
       parts.push(li);
     }
-    add("p", "Photos in the inbox and images inserted into documents upload during a sync and are not listed here.", "muted");
     body.replaceChildren(...parts);
     ($("sync-now") as HTMLButtonElement).disabled = phase === "syncing";
   }

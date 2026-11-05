@@ -1,7 +1,9 @@
+import 'dart:convert';
 import 'dart:io';
 
 import 'package:flutter/material.dart';
 import 'package:image_picker/image_picker.dart';
+import 'package:path_provider/path_provider.dart';
 
 import 'auth_errors.dart';
 import 'edit_photo_page.dart';
@@ -10,10 +12,73 @@ import 'supabase.dart';
 enum _State { uploading, sent, failed }
 
 class _Upload {
-  _Upload(this.file) : state = _State.uploading;
+  _Upload(this.file, {this.state = _State.uploading});
   final XFile file;
   _State state;
   String? error;
+
+  Map<String, dynamic> toJson() => {'path': file.path, 'state': state.name};
+}
+
+/// The sent list survives restarts: edited photos are kept in the app's
+/// support folder (not the OS temp dir) with a small JSON index beside them.
+class _History {
+  static const _keep = 50;
+  static Directory? _dir;
+
+  static Future<Directory> _folder() async {
+    final base = await getApplicationSupportDirectory();
+    final d = Directory('${base.path}/sent/${sb.auth.currentUser!.id}');
+    await d.create(recursive: true);
+    return _dir = d;
+  }
+
+  static File _index(Directory d) => File('${d.path}/index.json');
+
+  static Future<List<_Upload>> load() async {
+    final d = await _folder();
+    final f = _index(d);
+    if (!await f.exists()) return [];
+    try {
+      final list = jsonDecode(await f.readAsString()) as List;
+      return [
+        for (final m in list)
+          if (File(m['path'] as String).existsSync())
+            _Upload(
+              XFile(m['path'] as String),
+              // A send cut short by closing the app is retryable.
+              state: m['state'] == 'sent' ? _State.sent : _State.failed,
+            ),
+      ];
+    } catch (_) {
+      return [];
+    }
+  }
+
+  /// Moves a freshly edited photo out of temp storage.
+  static Future<String> adopt(String tmp) async {
+    final d = _dir ?? await _folder();
+    final dest = '${d.path}/${DateTime.now().microsecondsSinceEpoch}.jpg';
+    try {
+      await File(tmp).rename(dest);
+    } on FileSystemException {
+      await File(tmp).copy(dest);
+      await File(tmp).delete().catchError((_) => File(tmp));
+    }
+    return dest;
+  }
+
+  static Future<void> save(List<_Upload> uploads) async {
+    final d = _dir ?? await _folder();
+    for (final u in uploads.skip(_keep)) {
+      await File(u.file.path).delete().catchError((_) => File(u.file.path));
+    }
+    final kept = uploads.take(_keep).toList();
+    final f = _index(d);
+    final tmp = File('${f.path}.tmp');
+    await tmp.writeAsString(jsonEncode([for (final u in kept) u.toJson()]));
+    await tmp.rename(f.path);
+  }
 }
 
 final _bigButton = FilledButton.styleFrom(
@@ -31,14 +96,21 @@ class CapturePage extends StatefulWidget {
 
 class _CapturePageState extends State<CapturePage> {
   final _picker = ImagePicker();
-  final _uploads = <_Upload>[]; // this session only, newest first
+  final _uploads = <_Upload>[]; // newest first, persisted by _History
   int? _waiting; // photos still pending on the desktop
 
   @override
   void initState() {
     super.initState();
     _loadWaiting();
+    _History.load().then((saved) {
+      if (!mounted) return;
+      // Anything added while loading stays on top.
+      setState(() => _uploads.addAll(saved));
+    }).catchError((_) {});
   }
+
+  void _persist() => _History.save(_uploads).catchError((_) {});
 
   Future<void> _loadWaiting() async {
     try {
@@ -61,6 +133,7 @@ class _CapturePageState extends State<CapturePage> {
       await sb.storage.from('photos').upload(path, File(u.file.path));
       await sb.from('photos').insert({'storage_path': path});
       if (mounted) setState(() => u.state = _State.sent);
+      _persist();
       _loadWaiting();
     } catch (e) {
       if (mounted) {
@@ -68,6 +141,7 @@ class _CapturePageState extends State<CapturePage> {
           u.state = _State.failed;
           u.error = friendlyError(e);
         });
+        _persist();
       }
     }
   }
@@ -79,8 +153,10 @@ class _CapturePageState extends State<CapturePage> {
       MaterialPageRoute(builder: (_) => EditPhotoPage(path: f.path)),
     );
     if (edited == null) return; // cancelled
-    final u = _Upload(XFile(edited));
+    final u = _Upload(XFile(await _History.adopt(edited)));
+    if (!mounted) return;
     setState(() => _uploads.insert(0, u));
+    _persist();
     await _upload(u);
   }
 

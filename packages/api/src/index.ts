@@ -80,6 +80,27 @@ export function createApi(url: string, anonKey: string) {
       const { error } = await sb.from("photos").update({ status: "pending", trashed_at: null }).eq("id", id);
       if (error) throw error;
     },
+    /** Batch forms of trash / restore / delete, for multi-select. Rows go in chunks so the request URL stays short. */
+    async trashPhotos(ids: string[]) {
+      for (const part of chunks(ids)) {
+        const { error } = await sb.from("photos").update({ status: "trashed", trashed_at: new Date().toISOString() }).in("id", part);
+        if (error) throw error;
+      }
+    },
+    async restorePhotos(ids: string[]) {
+      for (const part of chunks(ids)) {
+        const { error } = await sb.from("photos").update({ status: "pending", trashed_at: null }).in("id", part);
+        if (error) throw error;
+      }
+    },
+    /** Rows first, then the files (see deletePhoto). */
+    async deletePhotos(ps: Photo[]) {
+      for (const part of chunks(ps)) {
+        const { error } = await sb.from("photos").delete().in("id", part.map((p) => p.id));
+        if (error) throw error;
+        await sb.storage.from(PHOTO_BUCKET).remove(part.map((p) => p.storage_path)).catch(() => {});
+      }
+    },
     /** Permanently deletes photos that have been in the trash longer than `days`. Returns how many. */
     async purgeTrash(days = 7): Promise<number> {
       const cutoff = new Date(Date.now() - days * 86_400_000).toISOString();
@@ -199,4 +220,10 @@ export function createApi(url: string, anonKey: string) {
         .subscribe();
     },
   };
+}
+
+function chunks<T>(items: T[], size = 100): T[][] {
+  const out: T[][] = [];
+  for (let i = 0; i < items.length; i += size) out.push(items.slice(i, i + size));
+  return out;
 }

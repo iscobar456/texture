@@ -1,7 +1,6 @@
 import { PHOTO_MIME } from "./placement";
 import { invoke } from "@tauri-apps/api/core";
 import type { createApi, Photo } from "@texture/api";
-import { attachMenu } from "./popup";
 import { toast } from "./toast";
 import { OCR_MODELS, type Settings } from "./settings";
 
@@ -96,8 +95,7 @@ const TRASH_DAYS = 7;
 export function initInbox(deps: InboxDeps) {
   const list = $("inbox-list");
   let lists: Record<Section, Photo[]> = { pending: [], used: [], trash: [] };
-  let usedOpen = false;
-  let trashOpen = false;
+  let tab: Section = "pending"; // which list the sidebar shows
   /** Pending photos already announced; null until the first load, so existing photos never trigger a toast. */
   let seen: Set<string> | null = null;
   let purged = false;
@@ -178,7 +176,24 @@ export function initInbox(deps: InboxDeps) {
 
   // ---- the lists ----
 
-  async function refresh() {
+  /** Many realtime events arrive at once after a bulk action; overlapping calls share one trailing reload. */
+  let running: Promise<void> | null = null;
+  let again = false;
+  function refresh(): Promise<void> {
+    if (running) {
+      again = true;
+      return running;
+    }
+    running = (async () => {
+      do {
+        again = false;
+        await load();
+      } while (again);
+    })().finally(() => { running = null; });
+    return running;
+  }
+
+  async function load() {
     try {
       // The photos waiting must always show. "Used" and "Trash" are extras: if they cannot be read (for example
       // before the matching database migration is applied), they are simply left out.
@@ -187,7 +202,7 @@ export function initInbox(deps: InboxDeps) {
         deps.api().listUsed().catch(() => [] as Photo[]),
         deps.api().listTrashed().catch(() => [] as Photo[]),
       ]);
-      lists = { pending, used, trash };
+      lists = { pending: applyOrder(pending), used, trash };
       render();
       deps.onCount(pending.length);
       announce(pending);
@@ -222,61 +237,380 @@ export function initInbox(deps: InboxDeps) {
 
   function render() {
     lazy.disconnect();
+    barUpdaters = [];
+    // Selection survives a reload, minus photos that are gone.
+    if (selecting) {
+      const ids = new Set(lists[selecting].map((p) => p.id));
+      for (const id of selected) if (!ids.has(id)) selected.delete(id);
+      if (!selected.size) selecting = null;
+    }
+    updateTabs();
     const parts: HTMLElement[] = [];
-
-    if (lists.pending.length) {
-      const wrap = document.createElement("div");
-      wrap.append(...lists.pending.map((p, i) => card(p, "pending", i)));
-      parts.push(wrap);
+    if (lists[tab].length) {
+      parts.push(bar(tab), ...lists[tab].map((p) => card(p, tab)));
     } else {
-      parts.push(emptyState());
-    }
-    if (lists.used.length) {
-      parts.push(section("Recently used", lists.used.length, usedOpen, (o) => (usedOpen = o), lists.used.map((p, i) => card(p, "used", i))));
-    }
-    if (lists.trash.length) {
-      parts.push(section("Trash", lists.trash.length, trashOpen, (o) => (trashOpen = o), lists.trash.map((p, i) => card(p, "trash", i))));
+      parts.push(emptyState(tab));
     }
     list.replaceChildren(...parts);
+    applySelection();
   }
 
-  function emptyState() {
-    const all = [...lists.pending, ...lists.used, ...lists.trash];
-    const newest = all.map((p) => p.created_at).sort().pop();
+  // ---- reordering the inbox (per device for now) ----
+
+  const orderKey = () => `texture:inbox-order:${deps.user()}`;
+
+  /** Your order first; photos that arrived since stay on top, newest first, as before. */
+  function applyOrder(ps: Photo[]): Photo[] {
+    let order: string[] = [];
+    try { order = JSON.parse(localStorage.getItem(orderKey()) ?? "[]"); } catch {}
+    if (!order.length) return ps;
+    const rank = new Map(order.map((id, i) => [id, i]));
+    const fresh = ps.filter((p) => !rank.has(p.id));
+    const known = ps.filter((p) => rank.has(p.id)).sort((a, b) => rank.get(a.id)! - rank.get(b.id)!);
+    return [...fresh, ...known];
+  }
+
+  function saveOrder() {
+    try { localStorage.setItem(orderKey(), JSON.stringify(lists.pending.map((p) => p.id))); } catch {}
+  }
+
+  const pendingCards = () => [...list.querySelectorAll<HTMLElement>('.photo[data-kind="pending"]')];
+
+  /** Moves a photo to index `to` of the pending list and updates the page in place, so no thumbnail reloads. */
+  function movePhoto(id: string, to: number) {
+    const from = lists.pending.findIndex((p) => p.id === id);
+    if (from < 0) return;
+    const [p] = lists.pending.splice(from, 1);
+    to = Math.max(0, Math.min(lists.pending.length, to));
+    lists.pending.splice(to, 0, p);
+    saveOrder();
+    const cards = new Map(pendingCards().map((c) => [c.dataset.id!, c]));
+    const el = cards.get(id);
+    if (!el) return;
+    const after = lists.pending[to + 1];
+    const ref = after ? cards.get(after.id) : null;
+    if (ref) ref.before(el);
+    else (pendingCards().filter((c) => c !== el).pop())?.after(el);
+  }
+
+  /** Where the dragged card would land: how many of the other cards have their middle above the pointer. */
+  function dropIndex(clientY: number, skip: HTMLElement) {
+    return pendingCards().filter((c) => {
+      if (c === skip) return false;
+      const r = c.getBoundingClientRect();
+      return clientY > r.top + r.height / 2;
+    }).length;
+  }
+
+  function showDrop(idx: number | null, skip: HTMLElement) {
+    const others = pendingCards().filter((c) => c !== skip);
+    others.forEach((c, i) => {
+      c.classList.toggle("drop-before", idx === i);
+      c.classList.toggle("drop-after", idx !== null && idx === others.length && i === others.length - 1);
+    });
+  }
+
+  /**
+   * Reordering follows the pointer itself rather than the browser's drag-and-drop, which is unreliable in some
+   * webviews: the card follows the pointer, a line shows where it will land, and the list scrolls near its edges.
+   */
+  function startReorder(el: HTMLElement, id: string, grip: HTMLElement, e: PointerEvent) {
+    e.preventDefault();
+    grip.setPointerCapture(e.pointerId);
+    const box = $("inbox");
+    const y0 = e.clientY;
+    const scroll0 = box.scrollTop;
+    let y = y0;
+    el.draggable = false; // the whole card is draggable into the editor; not while it is being reordered
+    el.classList.add("dragging");
+    const place = () => {
+      el.style.transform = `translateY(${y - y0 + box.scrollTop - scroll0}px)`;
+      showDrop(dropIndex(y, el), el);
+    };
+    const timer = setInterval(() => {
+      const edge = box.getBoundingClientRect();
+      if (y < edge.top + 48) box.scrollBy(0, -12);
+      else if (y > edge.bottom - 48) box.scrollBy(0, 12);
+      place();
+    }, 30);
+    const move = (ev: PointerEvent) => { y = ev.clientY; place(); };
+    const end = (ev: PointerEvent) => {
+      grip.removeEventListener("pointermove", move);
+      grip.removeEventListener("pointerup", end);
+      grip.removeEventListener("pointercancel", end);
+      clearInterval(timer);
+      if (grip.hasPointerCapture(ev.pointerId)) grip.releasePointerCapture(ev.pointerId);
+      const idx = dropIndex(y, el);
+      showDrop(null, el);
+      el.style.transform = "";
+      el.classList.remove("dragging");
+      el.draggable = selecting !== "pending";
+      if (ev.type !== "pointercancel") movePhoto(id, idx);
+    };
+    grip.addEventListener("pointermove", move);
+    grip.addEventListener("pointerup", end);
+    grip.addEventListener("pointercancel", end);
+  }
+
+  // ---- selecting several photos (to trash, restore or delete them together) ----
+
+  /** The section the ticked photos belong to (null when none are ticked), and the ticked ids. Ticking in another section starts over. */
+  let selecting: Section | null = null;
+  const selected = new Set<string>();
+  let barUpdaters: (() => void)[] = [];
+
+  function clearSelection() {
+    selecting = null;
+    selected.clear();
+    applySelection();
+  }
+
+  function toggleSelected(id: string, kind: Section) {
+    if (selecting !== kind) {
+      selected.clear();
+      selecting = kind;
+    }
+    if (!selected.delete(id)) selected.add(id);
+    if (!selected.size) selecting = null;
+    applySelection();
+  }
+
+  /** Updates cards and toolbars in place, so ticking a box never reloads the thumbnails. */
+  function applySelection() {
+    list.querySelectorAll<HTMLElement>(".photo").forEach((el) => {
+      const kind = el.dataset.kind as Section;
+      const on = selecting === kind;
+      const ticked = on && selected.has(el.dataset.id!);
+      el.classList.toggle("selectable", on);
+      el.classList.toggle("selected", ticked);
+      el.querySelector(".sel-box")?.setAttribute("aria-checked", String(ticked));
+      el.draggable = kind !== "trash" && !on;
+    });
+    barUpdaters.forEach((u) => u());
+  }
+
+  const icon = (d: string) => `<svg viewBox="0 0 16 16" width="16" height="16" aria-hidden="true" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round">${d}</svg>`;
+  const ICON = {
+    none: icon('<rect x="2.5" y="2.5" width="11" height="11" rx="2" fill="currentColor"/><path d="M5.5 8.5l2 2 3.5-4.5" stroke="Canvas"/>'),
+    all: icon('<rect x="2.5" y="2.5" width="11" height="11" rx="2"/><path d="M5.5 8.5l2 2 3.5-4.5"/>'),
+    trash: icon('<path d="M3 4.5h10M6.5 4.5V3h3v1.5M4.5 4.5l.6 8.5h5.8l.6-8.5M7 7v4M9 7v4"/>'),
+    cancel: icon('<path d="M4 4l8 8M12 4l-8 8"/>'),
+    ocr: icon('<path d="M2.5 4h11M2.5 8h11M2.5 12h6"/>'),
+    restore: icon('<path d="M3 7a5 5 0 1 1 1.6 3.7M3 3.5V7h3.5"/>'),
+  };
+
+  /** A button that asks for a second click before doing something permanent. It shows words only while armed. */
+  function confirmButton(label: string, glyph: string, confirmLabel: () => string, fn: () => Promise<void>, cls = "") {
+    const b = document.createElement("button");
+    b.className = `danger ${cls}`.trim();
+    b.title = label;
+    b.setAttribute("aria-label", label);
+    b.innerHTML = glyph;
+    let timer: ReturnType<typeof setTimeout> | undefined;
+    const reset = () => { clearTimeout(timer); b.dataset.armed = ""; b.innerHTML = glyph; };
+    b.addEventListener("click", async () => {
+      if (!b.dataset.armed) {
+        b.dataset.armed = "1";
+        b.textContent = confirmLabel();
+        timer = setTimeout(reset, 4000);
+        return;
+      }
+      reset();
+      b.disabled = true;
+      try { await fn(); } catch (e) { deps.status(String((e as Error)?.message ?? e)); } finally { b.disabled = false; }
+    });
+    return Object.assign(b, { reset });
+  }
+
+  /**
+   * The toolbar above a section's photos. Nothing shows until a photo is ticked; then it offers Select all, the
+   * bulk action (Move to trash, or Restore / Delete forever in Trash) and Cancel. Trash also always has Empty trash.
+   */
+  function bar(kind: Section) {
     const el = document.createElement("div");
-    el.className = "inbox-empty";
-    el.innerHTML = `${EMPTY_ICON}<p class="inbox-empty-title">No photos waiting</p><p class="muted">Photos you take in the Texture phone app appear here.</p>`;
-    const last = document.createElement("p");
-    last.className = "muted";
-    last.textContent = newest ? `Last photo received ${ago(newest)}.` : "Nothing has arrived from your phone yet.";
-    el.append(last);
+    el.className = "inbox-bar";
+    const photos = () => lists[kind];
+    const plural = (n: number) => `${n} photo${n === 1 ? "" : "s"}`;
+    const mk = (glyph: string, title: string, fn: () => void | Promise<void>, cls = "") => {
+      const b = document.createElement("button");
+      b.innerHTML = glyph;
+      b.title = title;
+      b.setAttribute("aria-label", title);
+      if (cls) b.className = cls;
+      b.addEventListener("click", async () => {
+        b.disabled = true;
+        try { await fn(); } catch (e) { deps.status(String((e as Error)?.message ?? e)); } finally { b.disabled = false; }
+      });
+      return b;
+    };
+    const chosen = () => photos().filter((p) => selected.has(p.id));
+
+    const count = document.createElement("span");
+    count.className = "inbox-bar-count";
+    const all = mk(ICON.all, "Select all", () => {
+      const every = photos().every((p) => selected.has(p.id));
+      selected.clear();
+      if (!every) for (const p of photos()) selected.add(p.id);
+      selecting = selected.size ? kind : null;
+      applySelection();
+    });
+    const cancel = mk(ICON.cancel, "Cancel", clearSelection);
+
+    const actions: (HTMLButtonElement & { reset?: () => void })[] = [];
+    if (kind === "trash") {
+      actions.push(
+        mk(ICON.restore, "Restore to inbox", async () => {
+          const ids = chosen().map((p) => p.id);
+          clearSelection();
+          if (ids.length) { ids.forEach((id) => seen?.add(id)); await deps.api().restorePhotos(ids); await refresh(); }
+        }),
+        confirmButton("Delete forever", ICON.trash, () => `Delete ${selected.size}?`, async () => {
+          const ps = chosen();
+          clearSelection();
+          if (ps.length) { await deps.api().deletePhotos(ps); await refresh(); }
+        }, "solid"),
+      );
+    } else {
+      actions.push(
+        kind === "used"
+          ? mk(ICON.restore, "Move to inbox", async () => {
+              const ps = chosen();
+              clearSelection();
+              await moveToInbox(ps);
+            })
+          // chosen() is in the list's order, so the transcriptions come out in the order you arranged the photos
+          : mk(ICON.ocr, "Transcribe the selected photos (OCR)…", () => openBatchOcr(chosen())),
+        mk(ICON.trash, "Move to trash", async () => {
+          const ids = chosen().map((p) => p.id);
+          clearSelection();
+          if (!ids.length) return;
+          await deps.api().trashPhotos(ids);
+          await refresh();
+          toast(`${plural(ids.length)} moved to trash`, {
+            actionLabel: "Undo",
+            onAction: () => { ids.forEach((id) => seen?.add(id)); void deps.api().restorePhotos(ids).then(refresh); },
+          });
+        }, "danger solid"),
+      );
+    }
+
+    const empty = kind === "trash"
+      ? confirmButton("Empty trash", `${ICON.trash}Empty trash`, () => `Delete all ${lists.trash.length}?`, async () => {
+          const ps = [...lists.trash];
+          if (ps.length) { clearSelection(); await deps.api().deletePhotos(ps); await refresh(); toast(`Trash emptied (${plural(ps.length)})`); }
+        }, "wide")
+      : null;
+
+    el.append(count, all, ...actions, cancel, ...(empty ? [empty] : []));
+    barUpdaters.push(() => {
+      const on = selecting === kind;
+      count.hidden = all.hidden = cancel.hidden = !on;
+      for (const a of actions) {
+        a.hidden = !on;
+        if (!on) a.reset?.();
+      }
+      if (empty) { empty.hidden = on; if (on) empty.reset(); }
+      const everyone = photos().every((p) => selected.has(p.id));
+      all.title = everyone ? "Select none" : "Select all";
+      all.classList.toggle("on", everyone);
+      all.innerHTML = everyone ? ICON.none : ICON.all;
+      all.setAttribute("aria-label", all.title);
+      count.textContent = `${selected.size} selected`;
+      el.hidden = !on && !empty; // an empty toolbar would only leave a gap
+    });
     return el;
   }
 
-  const CHEVRON = '<svg class="chev" viewBox="0 0 16 16" width="14" height="14" aria-hidden="true"><path d="M6 3.5L10.5 8 6 12.5" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/></svg>';
-  const EMPTY_ICON = '<svg class="inbox-empty-icon" viewBox="0 0 16 16" width="28" height="28" aria-hidden="true"><rect x="2" y="2.5" width="12" height="11" rx="2" fill="none" stroke="currentColor" stroke-width="1.4"/><circle cx="5.8" cy="6.2" r="1.1" fill="currentColor"/><path d="M2.6 11.6l3.1-3 2.6 2.4 2-1.8 3.1 2.8" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linecap="round" stroke-linejoin="round"/></svg>';
-
-  /** A collapsible group ("Recently used", "Trash") that remembers whether it is open. */
-  function section(title: string, count: number, open: boolean, remember: (open: boolean) => void, cards: HTMLElement[]) {
-    const d = document.createElement("details");
-    d.className = "inbox-section";
-    d.open = open;
-    const sum = document.createElement("summary");
-    sum.innerHTML = CHEVRON;
-    const name = document.createElement("span");
-    name.textContent = title;
-    const pill = document.createElement("span");
-    pill.className = "count";
-    pill.textContent = String(count);
-    sum.append(name, pill);
-    d.append(sum, ...cards);
-    d.addEventListener("toggle", () => remember(d.open));
-    return d;
+  function emptyState(which: Section) {
+    const el = document.createElement("div");
+    el.className = "inbox-empty";
+    const [title, hint] =
+      which === "used" ? ["Nothing used yet", "Photos you insert or transcribe are kept here, so you can use them again."]
+      : which === "trash" ? ["Trash is empty", `Deleted photos stay here for ${TRASH_DAYS} days.`]
+      : ["No photos waiting", "Photos you take in the Texture phone app appear here."];
+    el.innerHTML = `${EMPTY_ICON}<p class="inbox-empty-title">${title}</p><p class="muted">${hint}</p>`;
+    if (which === "pending") {
+      const all = [...lists.pending, ...lists.used, ...lists.trash];
+      const newest = all.map((p) => p.created_at).sort().pop();
+      const last = document.createElement("p");
+      last.className = "muted";
+      last.textContent = newest ? `Last photo received ${ago(newest)}.` : "Nothing has arrived from your phone yet.";
+      el.append(last);
+    }
+    return el;
   }
 
-  function card(p: Photo, kind: Section, index: number) {
+  // ---- tabs: Inbox / Used / Trash ----
+
+  const tabsEl = $("inbox-tabs");
+  const TABS: [Section, string][] = [["pending", "Inbox"], ["used", "Used"], ["trash", "Trash"]];
+  const tabButtons = new Map<Section, HTMLButtonElement>();
+  for (const [which, label] of TABS) {
+    const b = document.createElement("button");
+    b.setAttribute("role", "tab");
+    b.className = "inbox-tab";
+    const name = document.createElement("span");
+    name.textContent = label;
+    const count = document.createElement("span");
+    count.className = "count";
+    b.append(name, count);
+    b.addEventListener("click", () => setTab(which));
+    b.addEventListener("keydown", (e) => {
+      const i = TABS.findIndex(([w]) => w === which);
+      const to = e.key === "ArrowRight" ? TABS[(i + 1) % TABS.length] : e.key === "ArrowLeft" ? TABS[(i + TABS.length - 1) % TABS.length] : null;
+      if (!to) return;
+      e.preventDefault();
+      setTab(to[0]);
+      tabButtons.get(to[0])!.focus();
+    });
+    tabButtons.set(which, b);
+    tabsEl.append(b);
+  }
+
+  function updateTabs() {
+    for (const [which] of TABS) {
+      const b = tabButtons.get(which)!;
+      const on = which === tab;
+      b.setAttribute("aria-selected", String(on));
+      b.tabIndex = on ? 0 : -1;
+      b.classList.toggle("on", on);
+      const n = lists[which].length;
+      const c = b.querySelector<HTMLElement>(".count")!;
+      c.textContent = String(n);
+      c.hidden = n === 0;
+    }
+  }
+
+  function setTab(which: Section) {
+    if (which === tab) return;
+    tab = which;
+    selecting = null; // a selection belongs to one list
+    selected.clear();
+    render();
+    $("inbox").scrollTop = 0;
+  }
+
+  const EMPTY_ICON = '<svg class="inbox-empty-icon" viewBox="0 0 16 16" width="28" height="28" aria-hidden="true"><rect x="2" y="2.5" width="12" height="11" rx="2" fill="none" stroke="currentColor" stroke-width="1.4"/><circle cx="5.8" cy="6.2" r="1.1" fill="currentColor"/><path d="M2.6 11.6l3.1-3 2.6 2.4 2-1.8 3.1 2.8" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linecap="round" stroke-linejoin="round"/></svg>';
+
+  function card(p: Photo, kind: Section) {
     const el = document.createElement("div");
     el.className = "photo";
+    el.dataset.id = p.id;
+    el.dataset.kind = kind;
+    const at = () => Math.max(0, lists[kind].findIndex((x) => x.id === p.id)); // the list can be reordered after this card was built
+    const box = document.createElement("button");
+    box.className = "sel-box";
+    box.setAttribute("role", "checkbox");
+    box.setAttribute("aria-checked", "false");
+    box.setAttribute("aria-label", "Select this photo");
+    box.addEventListener("click", () => toggleSelected(p.id, kind));
+    // Once something in this section is ticked, a click anywhere on a card ticks it too, instead of opening the viewer.
+    el.addEventListener("click", (e) => {
+      if (selecting !== kind) return;
+      e.preventDefault();
+      e.stopPropagation(); // also keeps the box's own handler from toggling twice
+      toggleSelected(p.id, kind);
+    }, true);
 
     const imgBtn = document.createElement("button");
     imgBtn.className = "photo-img loading";
@@ -289,7 +623,7 @@ export function initInbox(deps: InboxDeps) {
     } else {
       imgBtn.title = "View larger";
       imgBtn.setAttribute("aria-label", "View photo larger");
-      imgBtn.addEventListener("click", () => openViewer(kind, index));
+      imgBtn.addEventListener("click", () => openViewer(kind, at()));
     }
     lazy.observe(img);
     if (kind !== "trash") {
@@ -299,6 +633,22 @@ export function initInbox(deps: InboxDeps) {
         e.dataTransfer?.setData(PHOTO_MIME, p.id);
         if (e.dataTransfer) e.dataTransfer.effectAllowed = "copy";
       });
+    }
+    if (kind === "pending") {
+      const grip = document.createElement("button");
+      grip.className = "grip";
+      grip.title = "Drag to reorder (or press ↑ / ↓ here)";
+      grip.setAttribute("aria-label", "Reorder this photo");
+      grip.innerHTML = '<svg viewBox="0 0 16 16" width="14" height="14" aria-hidden="true" fill="currentColor"><circle cx="5.5" cy="4" r="1.2"/><circle cx="10.5" cy="4" r="1.2"/><circle cx="5.5" cy="8" r="1.2"/><circle cx="10.5" cy="8" r="1.2"/><circle cx="5.5" cy="12" r="1.2"/><circle cx="10.5" cy="12" r="1.2"/></svg>';
+      grip.addEventListener("pointerdown", (e) => { if (e.button === 0) startReorder(el, p.id, grip, e); });
+      grip.addEventListener("keydown", (e) => {
+        if (e.key !== "ArrowUp" && e.key !== "ArrowDown") return;
+        e.preventDefault();
+        movePhoto(p.id, at() + (e.key === "ArrowUp" ? -1 : 1));
+        grip.focus();
+        el.scrollIntoView({ block: "nearest" });
+      });
+      el.append(grip);
     }
 
     const when = document.createElement("div");
@@ -319,22 +669,16 @@ export function initInbox(deps: InboxDeps) {
       );
       actions.classList.add("two");
     } else {
-      const more = document.createElement("button");
-      more.textContent = "⋮";
-      more.title = "More";
-      more.setAttribute("aria-label", "More actions");
-      attachMenu(more, document.body, [
-        { label: "View larger", run: () => openViewer(kind, index) },
-        { label: "Move to trash", danger: true, run: () => void trash(p) },
-      ]);
       actions.append(
-        button(kind === "used" ? "Insert again" : "Insert", "Insert the photo into the document at the cursor", async () => chooseAndInsert(p), ""),
-        button("OCR…", "Transcribe the handwriting to LaTeX and review it first", async () => openOcr(p), ""),
-        more,
+        kind === "used"
+          ? button("Move to inbox", "Move it back to the inbox", async () => moveToInbox([p]), "")
+          : button("Insert", "Insert the photo into the document at the cursor", async () => chooseAndInsert(p), ""),
+        button("Transcribe", "Turn the handwriting into LaTeX and review it before inserting", async () => openOcr(p), ""),
       );
+      actions.classList.add("two");
     }
 
-    el.append(imgBtn, when, actions);
+    el.append(box, imgBtn, when, actions);
     return el;
   }
 
@@ -367,6 +711,19 @@ export function initInbox(deps: InboxDeps) {
     } catch (e) {
       deps.status(String((e as Error)?.message ?? e));
     }
+  }
+
+  /** Puts used photos back among the waiting ones (they land on top, as new arrivals do). */
+  async function moveToInbox(ps: Photo[]) {
+    if (!ps.length) return;
+    const ids = ps.map((p) => p.id);
+    ids.forEach((id) => seen?.add(id)); // not new arrivals
+    await deps.api().restorePhotos(ids);
+    await refresh();
+    toast(ids.length === 1 ? "Photo moved to inbox" : `${ids.length} photos moved to inbox`, {
+      actionLabel: "Undo",
+      onAction: () => void Promise.all(ids.map((id) => deps.api().markImported(id))).then(refresh),
+    });
   }
 
   async function restore(p: Photo) {
@@ -567,6 +924,218 @@ export function initInbox(deps: InboxDeps) {
   });
   new ResizeObserver(() => { if (viewer.open) applyZoom(); }).observe(stage);
 
+  // ---- OCR for several selected photos at once, inserted in inbox order ----
+
+  const batchDialog = $<HTMLDialogElement>("obatch-dialog");
+  const batchList = $("obatch-list");
+  const batchNote = $("obatch-note");
+  const batchStart = $<HTMLButtonElement>("obatch-start");
+  const batchInsert = $<HTMLButtonElement>("obatch-insert");
+  const batchWithImage = $<HTMLInputElement>("obatch-with-image");
+  type BatchItem = {
+    p: Photo;
+    text: HTMLTextAreaElement;
+    state: HTMLElement;
+    retry: HTMLButtonElement;
+    status: "idle" | "busy" | "done" | "error" | "saved";
+  };
+  let batch: BatchItem[] = [];
+  let batchPos = 0;
+  let batchRun = 0; // bumped on open and close, so a request that returns late is ignored
+  let batchStarted = false;
+  const modelLabel = () => {
+    const m = OCR_MODELS.find(([v]) => v === deps.settings().ocrModel);
+    return m ? m[1].split(" - ")[0] : "";
+  };
+
+  function setItemState(it: BatchItem, text: string, kind: "busy" | "ok" | "error" | "info") {
+    it.state.className = `obi-state ${kind === "error" ? "error" : ""}`;
+    it.state.replaceChildren();
+    if (kind === "busy") {
+      const sp = document.createElement("span");
+      sp.className = "spinner";
+      it.state.append(sp);
+    }
+    it.state.append(text);
+  }
+
+  function updateBatchUi() {
+    const plural = (n: number) => `${n} photo${n === 1 ? "" : "s"}`;
+    const idle = batch.filter((i) => i.status === "idle").length;
+    const saved = batch.filter((i) => i.status === "saved").length;
+    const busy = batch.filter((i) => i.status === "busy").length;
+    const failed = batch.filter((i) => i.status === "error" && !i.text.value.trim()).length;
+    const filled = batch.filter((i) => i.text.value.trim()).length;
+    let msg: string;
+    let kind: "busy" | "ok" | "error" | "info" = "info";
+    if (!batchStarted && idle) {
+      msg = `${plural(idle)} will be transcribed with ${modelLabel()} and billed to your Anthropic account.` +
+        (saved ? ` ${saved} already ${saved === 1 ? "has" : "have"} a saved transcription (no charge).` : "");
+    } else if (busy) {
+      msg = `Transcribing… ${batch.length - idle - busy} of ${batch.length} finished.`;
+      kind = "busy";
+    } else if (failed) {
+      msg = `${failed} failed and will be skipped when you insert, unless you retry or type the text yourself.`;
+      kind = "error";
+    } else {
+      msg = "Check each transcription against its photo, then insert them all.";
+      kind = "ok";
+    }
+    batchNote.className = `ocr-state ${kind}`;
+    batchNote.replaceChildren();
+    if (kind === "busy") {
+      const sp = document.createElement("span");
+      sp.className = "spinner";
+      batchNote.append(sp);
+    }
+    batchNote.append(msg);
+    batchStart.hidden = batchStarted || !idle;
+    batchStart.textContent = `Transcribe ${plural(idle)}`;
+    batchInsert.disabled = busy > 0 || !filled;
+    batchInsert.textContent = filled ? `Insert ${plural(filled)}` : "Insert";
+    for (const it of batch) it.retry.hidden = it.status === "idle" || it.status === "busy";
+  }
+
+  async function openBatchOcr(ps: Photo[]) {
+    if (!ps.length) return;
+    if (deps.target() === null) throw new Error("Open a document to insert the transcriptions");
+    const pos = await deps.pickInsertPoint("transcriptions");
+    if (pos === null) return; // cancelled before anything was billed
+    batchPos = pos;
+    batchRun++;
+    batchStarted = false;
+    batchWithImage.checked = false;
+    $("obatch-title").textContent = `Transcribe ${ps.length} photo${ps.length === 1 ? "" : "s"}`;
+    $("obatch-model").textContent = modelLabel();
+    batch = ps.map((p, i) => {
+      const row = document.createElement("div");
+      row.className = "obi";
+      const imgBox = document.createElement("div");
+      imgBox.className = "obi-img";
+      const img = document.createElement("img");
+      img.alt = "";
+      imgBox.append(img);
+      schedule(async () => { try { img.src = await thumbUrl(p); } catch {} });
+      const head = document.createElement("div");
+      head.className = "obi-head";
+      const n = document.createElement("span");
+      n.className = "obi-n";
+      n.textContent = String(i + 1);
+      n.title = "Position in the inserted text";
+      const state = document.createElement("span");
+      state.className = "obi-state";
+      const retry = document.createElement("button");
+      retry.className = "obi-retry";
+      retry.textContent = "Transcribe again";
+      retry.title = "Run the model again for this photo (billed)";
+      head.append(n, state, retry);
+      const text = document.createElement("textarea");
+      text.spellcheck = false;
+      text.placeholder = "The transcription appears here. You can edit it before inserting.";
+      text.addEventListener("input", updateBatchUi);
+      const main = document.createElement("div");
+      main.className = "obi-main";
+      main.append(head, text);
+      row.append(imgBox, main);
+      const it: BatchItem = { p, text, state, retry, status: p.ocr_latex ? "saved" : "idle" };
+      if (p.ocr_latex) {
+        text.value = p.ocr_latex;
+        setItemState(it, "Saved transcription (no charge)", "info");
+      } else {
+        setItemState(it, "Not transcribed yet", "info");
+      }
+      retry.addEventListener("click", () => void retryItem(it));
+      batchList.append(row);
+      return it;
+    });
+    updateBatchUi();
+    batchDialog.showModal();
+  }
+
+  async function transcribe(it: BatchItem, run: number) {
+    it.status = "busy";
+    setItemState(it, "Transcribing…", "busy");
+    updateBatchUi();
+    try {
+      const jpeg = await bytesOf(await renderRotated(await original(it.p), 0, 1568, 0.85));
+      const r = await invoke<{ latex: string; input_tokens: number; output_tokens: number; stop_reason: string }>(
+        "ocr_image", jpeg, { headers: { "x-user": deps.user(), "x-model": deps.settings().ocrModel } },
+      );
+      if (run !== batchRun || !batchDialog.open) return;
+      it.text.value = r.latex;
+      void rememberOcr(it.p, r.latex);
+      it.status = "done";
+      const cut = r.stop_reason === "max_tokens";
+      setItemState(it, cut ? "Done, but the output was cut off. Consider a smaller part." : "Done", cut ? "error" : "ok");
+    } catch (e) {
+      if (run !== batchRun || !batchDialog.open) return;
+      it.status = "error";
+      setItemState(it, String((e as Error)?.message ?? e), "error");
+    }
+    updateBatchUi();
+  }
+
+  async function hasKey(): Promise<boolean> {
+    if (await invoke<boolean>("has_api_key", { user: deps.user() })) return true;
+    batchNote.className = "ocr-state error";
+    batchNote.textContent = "Add your Anthropic API key under Menu → Settings → Photo OCR, then try again.";
+    return false;
+  }
+
+  async function startBatch() {
+    if (!(await hasKey())) return;
+    batchStarted = true;
+    const run = batchRun;
+    const todo = batch.filter((i) => i.status === "idle");
+    updateBatchUi();
+    let next = 0;
+    // A few at a time: quick, but kind to the API's rate limits. The rows stay in inbox order regardless.
+    const worker = async () => {
+      while (next < todo.length && run === batchRun) await transcribe(todo[next++], run);
+    };
+    await Promise.all([worker(), worker(), worker()]);
+  }
+
+  async function retryItem(it: BatchItem) {
+    if (!(await hasKey())) return;
+    batchStarted = true;
+    await transcribe(it, batchRun);
+  }
+
+  async function insertBatch() {
+    const items = batch.filter((i) => i.text.value.trim());
+    if (!items.length) return;
+    batchInsert.disabled = true;
+    try {
+      const parts: string[] = [];
+      for (const it of items) {
+        const image = batchWithImage.checked ? `${await placeImage(it.p, 0)}\n` : "";
+        parts.push(`${image}${it.text.value.trim()}\n`);
+      }
+      await Promise.all(items.map(async (it) => {
+        await rememberOcr(it.p, it.text.value); // keeps any edits you made
+        await deps.api().markImported(it.p.id);
+      }));
+      batchDialog.close(); // before inserting, so the Undo toast is clickable
+      deps.insertAt(batchPos, parts.join("\n")); // one insertion, so one Undo
+      clearSelection();
+      await refresh();
+    } catch (e) {
+      batchNote.className = "ocr-state error";
+      batchNote.textContent = String((e as Error)?.message ?? e);
+      batchInsert.disabled = false;
+    }
+  }
+
+  batchStart.addEventListener("click", () => void startBatch());
+  batchInsert.addEventListener("click", () => void insertBatch());
+  batchDialog.addEventListener("close", () => {
+    batchRun++;
+    for (const it of batch) if (it.text.value.trim()) void rememberOcr(it.p, it.text.value);
+    batchList.replaceChildren();
+    batch = [];
+  });
+
   // ---- OCR with review ----
 
   const ocrDialog = $<HTMLDialogElement>("ocr-dialog");
@@ -621,7 +1190,7 @@ export function initInbox(deps: InboxDeps) {
     await runOcr();
   }
 
-  /** Saves the text with the photo (best effort: a failure only means the next OCR… run is billed again). */
+  /** Saves the text with the photo (best effort: a failure only means the next transcription is billed again). */
   async function rememberOcr(p: Photo, latex: string) {
     const text = latex.trim();
     if (!text || text === p.ocr_latex) return;

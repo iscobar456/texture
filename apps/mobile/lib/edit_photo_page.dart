@@ -153,6 +153,7 @@ class _EditPhotoPageState extends State<EditPhotoPage> {
                         ? src.height / src.width
                         : src.width / src.height,
                     turns: _turns,
+                    srcWide: src.width >= src.height,
                     crop: _crop,
                     onChanged: (r) => setState(() => _crop = r),
                   ),
@@ -196,12 +197,14 @@ class _CropArea extends StatefulWidget {
     required this.path,
     required this.aspect,
     required this.turns,
+    required this.srcWide,
     required this.crop,
     required this.onChanged,
   });
   final String path;
   final double aspect; // width / height of the rotated image
   final int turns;
+  final bool srcWide; // decode by width (else height) to cap the texture size
   final Rect crop;
   final ValueChanged<Rect> onChanged;
 
@@ -214,6 +217,8 @@ class _CropAreaState extends State<_CropArea> {
   static const _minFrac = 0.08;
   _Drag _drag = _Drag.none;
   Rect _box = Rect.zero; // image rect inside the area, in local px
+  Offset _start = Offset.zero; // where the current drag began
+  Rect _startCrop = Rect.zero; // the crop when it began
 
   Rect get _crop => widget.crop;
 
@@ -243,10 +248,13 @@ class _CropAreaState extends State<_CropArea> {
     return _Drag.none;
   }
 
+  // Applies the finger's total movement since the drag began to the crop it
+  // began with, so there is no accumulated drift and no touch-slop jump.
   void _update(Offset delta) {
     if (_box.isEmpty) return;
     final dx = delta.dx / _box.width, dy = delta.dy / _box.height;
-    var l = _crop.left, t = _crop.top, r = _crop.right, b = _crop.bottom;
+    final c = _startCrop;
+    var l = c.left, t = c.top, r = c.right, b = c.bottom;
     switch (_drag) {
       case _Drag.none:
         return;
@@ -297,18 +305,35 @@ class _CropAreaState extends State<_CropArea> {
         }
         _box = Rect.fromLTWH((c.maxWidth - w) / 2, (c.maxHeight - h) / 2, w, h);
         final turns = widget.turns;
-        return GestureDetector(
+        // Raw pointer events: a GestureDetector pan waits out the touch slop
+        // and then reports only the movement after it, which feels laggy.
+        return Listener(
           behavior: HitTestBehavior.opaque,
-          onPanStart: (d) => _drag = _hit(d.localPosition),
-          onPanUpdate: (d) => _update(d.delta),
-          onPanEnd: (_) => _drag = _Drag.none,
+          onPointerDown: (e) {
+            _drag = _hit(e.localPosition);
+            _start = e.localPosition;
+            _startCrop = _crop;
+          },
+          onPointerMove: (e) => _update(e.localPosition - _start),
+          onPointerUp: (_) => _drag = _Drag.none,
+          onPointerCancel: (_) => _drag = _Drag.none,
           child: Stack(
             children: [
               Positioned.fromRect(
                 rect: _box,
-                child: RotatedBox(
-                  quarterTurns: turns,
-                  child: Image.file(File(widget.path), fit: BoxFit.fill),
+                // Decoded at screen-ish size and cached as its own layer so a
+                // drag only repaints the overlay, not a 3000px photo.
+                child: RepaintBoundary(
+                  child: RotatedBox(
+                    quarterTurns: turns,
+                    child: Image.file(
+                      File(widget.path),
+                      fit: BoxFit.fill,
+                      cacheWidth: widget.srcWide ? 1600 : null,
+                      cacheHeight: widget.srcWide ? null : 1600,
+                      filterQuality: FilterQuality.low,
+                    ),
+                  ),
                 ),
               ),
               Positioned.fill(

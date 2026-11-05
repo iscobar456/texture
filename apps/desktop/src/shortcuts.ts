@@ -85,7 +85,7 @@ function sections(vimOn: boolean): Section[] {
       ],
     },
     {
-      title: "Placing a photo (after Insert or OCR…)",
+      title: "Placing a photo (after Insert or Transcribe)",
       note: "Photos and transcriptions always go on whole lines. You can also drag a photo card from the inbox onto the editor.",
       rows: [
         ["Click", "Insert above the line if you click its top half, below it if you click the bottom half"],

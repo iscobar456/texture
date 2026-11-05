@@ -9,3 +9,8 @@ supabase/.temp/
 
 # tectonic sidecar, fetched by apps/desktop/scripts/fetch-tectonic.mjs
 apps/desktop/src-tauri/binaries/
+
+# Android signing keys (never commit)
+*.jks
+*.keystore
+key.properties

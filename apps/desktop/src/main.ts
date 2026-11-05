@@ -414,6 +414,8 @@ $("export-pdf").addEventListener("click", async () => {
   }
 });
 
+$("preview-export").addEventListener("click", () => $("export-pdf").click());
+
 initShortcutsUi(() => settings.editing === "vim");
 initDialogs(() => view?.focus());
 initLatexSetup(renderBar); // the compile bar says so when a compile is waiting on the first-run download
@@ -428,6 +430,16 @@ const inbox = initInbox({
   status,
   askDelete: (p) => askDeletePhoto(p),
   onCount: (n) => layout.setInboxCount(n),
+});
+
+const inboxRefresh = $<HTMLButtonElement>("inbox-refresh");
+inboxRefresh.addEventListener("click", async () => {
+  inboxRefresh.classList.add("spinning");
+  inboxRefresh.disabled = true;
+  const minShown = new Promise((r) => setTimeout(r, 500)); // so a fast refresh still visibly happens
+  await Promise.all([inbox.refresh(), minShown]);
+  inboxRefresh.classList.remove("spinning");
+  inboxRefresh.disabled = false;
 });
 
 // ---- snippets: one user-owned TOML file (see default-snippets.toml) ----
