@@ -8,19 +8,6 @@ use serde::{Deserialize, Serialize};
 use tauri::ipc::{InvokeBody, Request, Response};
 use tauri::Manager;
 
-const TEMPLATE_HOMEWORK: &str = r"\documentclass{article}
-\usepackage{amsmath, amssymb, graphicx}
-\usepackage[margin=1in]{geometry}
-\title{Homework}
-\author{}
-\begin{document}
-\maketitle
-
-\section*{Problem 1}
-
-\end{document}
-";
-
 const TEMPLATE_BLANK: &str = r"\documentclass{article}
 \begin{document}
 
@@ -28,8 +15,7 @@ const TEMPLATE_BLANK: &str = r"\documentclass{article}
 ";
 
 /// Built-ins are embedded, never written to disk and never synced.
-const BUILTIN_TEMPLATES: [(&str, &str); 2] =
-    [("Homework", TEMPLATE_HOMEWORK), ("Blank", TEMPLATE_BLANK)];
+const BUILTIN_TEMPLATES: [(&str, &str); 1] = [("Blank", TEMPLATE_BLANK)];
 
 /// Per-document sync state, stored beside the document.
 /// `remote_at` is the server `updated_at` this copy was last in step with.
@@ -532,6 +518,63 @@ fn create_document(
     Ok(body)
 }
 
+/// "<base> copy", "<base> copy 2", ... : the first one `taken` does not claim, kept within the name length limit.
+fn copy_name(base: &str, taken: impl Fn(&str) -> bool) -> String {
+    for n in 1.. {
+        let suffix = if n == 1 { " copy".to_string() } else { format!(" copy {n}") };
+        let keep: String = base.chars().take(64usize.saturating_sub(suffix.chars().count())).collect();
+        let name = format!("{}{}", keep.trim_end(), suffix);
+        if !taken(&name) {
+            return name;
+        }
+    }
+    unreachable!()
+}
+
+/// Duplicates a document (text and images) next to the original. The copy is a new, unsynced document.
+/// Returns its path.
+#[tauri::command]
+fn duplicate_document(app: tauri::AppHandle, user: String, path: String) -> Result<String, String> {
+    let from = item_path(&app, &user, &path)?;
+    if !is_document(&from) {
+        return Err(format!("{path:?} is not a document"));
+    }
+    let parent = parent_path(&path);
+    let join = |name: &str| if parent.is_empty() { name.to_string() } else { format!("{parent}/{name}") };
+    let name = copy_name(path.rsplit('/').next().unwrap_or(&path), |n| {
+        item_path(&app, &user, &join(n)).map(|p| p.exists()).unwrap_or(true)
+    });
+    let new_path = join(&name);
+    let to = ensure_doc_dir(&app, &user, &new_path)?;
+    fs::copy(from.join("main.tex"), to.join("main.tex")).map_err(|e| e.to_string())?;
+    if let Ok(images) = fs::read_dir(from.join("images")) {
+        for e in images.flatten() {
+            if e.path().is_file() && !e.file_name().to_string_lossy().starts_with('.') {
+                fs::copy(e.path(), to.join("images").join(e.file_name())).map_err(|e| e.to_string())?;
+            }
+        }
+    }
+    write_meta(&to.join(".sync.json"), &Meta { dirty: true, ..Default::default() })?;
+    Ok(new_path)
+}
+
+fn parent_path(path: &str) -> &str {
+    path.rsplit_once('/').map(|(p, _)| p).unwrap_or("")
+}
+
+/// Duplicates a template, built-in or not, as a new unsynced template. Returns its name.
+#[tauri::command]
+fn duplicate_template(app: tauri::AppHandle, user: String, name: String) -> Result<String, String> {
+    let source = read_template(app.clone(), user.clone(), name.clone())?;
+    let new = copy_name(&name, |n| {
+        template_paths(&app, &user, n).map(|(f, _)| f.exists() || builtin(n).is_some()).unwrap_or(true)
+    });
+    let (file, meta) = template_paths(&app, &user, &new)?;
+    write_atomic(file, source).map_err(|e| e.to_string())?;
+    write_meta(&meta, &Meta { dirty: true, ..Default::default() })?;
+    Ok(new)
+}
+
 #[tauri::command]
 fn save_template(
     app: tauri::AppHandle,
@@ -616,6 +659,7 @@ fn apply_remote(
 }
 
 /// Records a successful push of `pushed`. The doc stays dirty if it changed while the push ran.
+/// Returns false if the item was deleted while the push was in flight (nothing is recreated for it).
 #[tauri::command]
 fn mark_synced(
     app: tauri::AppHandle,
@@ -625,22 +669,35 @@ fn mark_synced(
     pushed: String,
     remote_at: String,
     id: String,
-) -> Result<(), String> {
+) -> Result<bool, String> {
     let (file, meta_path) = match kind.as_str() {
         "document" => {
-            let dir = ensure_doc_dir(&app, &user, &path)?;
+            let dir = item_path(&app, &user, &path)?;
+            if !is_document(&dir) {
+                return Ok(false);
+            }
             (dir.join("main.tex"), dir.join(".sync.json"))
         }
         "folder" => {
             let dir = item_path(&app, &user, &path)?;
-            return update_meta(&dir.join(".sync.json"), |m| {
+            if !dir.is_dir() {
+                return Ok(false);
+            }
+            update_meta(&dir.join(".sync.json"), |m| {
                 m.dirty = false;
                 m.remote_at = Some(remote_at);
                 m.id = Some(id);
                 m.remote_path = Some(path);
-            });
+            })?;
+            return Ok(true);
         }
-        "template" => template_paths(&app, &user, &path)?,
+        "template" => {
+            let paths = template_paths(&app, &user, &path)?;
+            if !paths.0.is_file() {
+                return Ok(false);
+            }
+            paths
+        }
         "config" => config_paths(&app, &user, &path)?,
         _ => return Err(format!("unknown kind {kind:?}")),
     };
@@ -650,7 +707,8 @@ fn mark_synced(
         m.remote_at = Some(remote_at);
         m.id = Some(id);
         m.remote_path = Some(path);
-    })
+    })?;
+    Ok(true)
 }
 
 /// Remembers an item's server identity before it is first pushed, so a push that is interrupted
@@ -1404,6 +1462,8 @@ pub fn run() {
             move_item,
             rename_template,
             rename_local,
+            duplicate_document,
+            duplicate_template,
             set_item_id,
             remove_local,
             compile,
@@ -1485,6 +1545,16 @@ mod sync_tests {
         let _ = fs::remove_dir_all(&dir);
         fs::create_dir_all(&dir).unwrap();
         dir
+    }
+
+    #[test]
+    fn copy_names_count_up_and_respect_the_length_limit() {
+        assert_eq!(copy_name("HW", |_| false), "HW copy");
+        assert_eq!(copy_name("HW", |n| n == "HW copy"), "HW copy 2");
+        let long = "x".repeat(64);
+        let c = copy_name(&long, |_| false);
+        assert_eq!(c.chars().count(), 64);
+        assert!(c.ends_with(" copy"));
     }
 
     #[test]

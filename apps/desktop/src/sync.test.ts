@@ -218,9 +218,10 @@ class Device {
         return;
       }
       case "mark_synced": {
-        const t = a.kind === "template" ? this.templates.get(a.path)! : this.items.get(a.path)!;
+        const t = a.kind === "template" ? this.templates.get(a.path) : this.items.get(a.path);
+        if (!t) return false; // deleted while the push was in flight
         t.meta = { dirty: a.kind === "folder" ? false : t.source !== a.pushed, remote_at: a.remoteAt, id: a.id, remote_path: a.path };
-        return;
+        return true;
       }
       case "remove_local": {
         if (a.kind === "template") return void this.templates.delete(a.path);
@@ -317,7 +318,7 @@ describe("basic sync", () => {
   it("gives new items an id that is not a valid path", async () => {
     A.createDoc("HW", "x");
     await sync(A);
-    expect(A.doc("HW")?.meta.id).toMatch(/^~/);
+    expect(A.doc("HW")?.meta.id).toMatch(/^!/);
   });
 
   it("propagates edits", async () => {
@@ -687,7 +688,82 @@ describe("items from before ids existed", () => {
     const res = await sync(A);
     expect(res.errors).toEqual([]);
     expect(server.live("document").find((d) => d.path === "HW")!.source).toBe("second life");
-    expect(server.live("document").find((d) => d.path === "HW")!.id).toMatch(/^~/);
+    expect(server.live("document").find((d) => d.path === "HW")!.id).toMatch(/^!/);
+  });
+});
+
+describe("ids from the short-lived '~' form", () => {
+  it("map to the '!' form that migration 0010 gave the server rows", async () => {
+    server.docs.set("!abc", { id: "!abc", kind: "document", path: "HW", source: "body", updated_at: "L1", deleted_at: null, preview_at: null });
+    A.items.set("HW", { kind: "document", source: "body", images: new Map(), meta: { ...blank(), remote_at: "L1", id: "~abc", remote_path: "HW" } });
+    const res = await sync(A);
+    expect(res.errors).toEqual([]);
+    expect(A.doc("HW")?.meta.id).toBe("!abc");
+    expect(server.docs.size).toBe(1);
+  });
+
+  it("also in a pending deletion", async () => {
+    server.docs.set("!abc", { id: "!abc", kind: "document", path: "HW", source: "body", updated_at: "L1", deleted_at: null, preview_at: null });
+    A.tombs.push({ kind: "document", path: "HW", id: "~abc", remote_at: "L1" });
+    await sync(A);
+    expect(server.live("document")).toEqual([]);
+  });
+});
+
+describe("deleting what was just created", () => {
+  it("a synced copy stays deleted", async () => {
+    A.createDoc("hw5", "body");
+    await settle();
+    A.createDoc("hw5 copy", "body");
+    await sync(A);
+    A.deleteItem("hw5 copy");
+    await sync(A);
+    await sync(A);
+    expect(A.paths("document")).toEqual(["hw5"]);
+    expect(server.live("document").map((d) => d.path)).toEqual(["hw5"]);
+  });
+
+  it("deleted while its first push is in flight", async () => {
+    A.createDoc("copy", "body");
+    const insert = server.api.insertDoc;
+    server.api.insertDoc = async (...args: Parameters<typeof insert>) => {
+      const at = await insert(...args);
+      A.deleteItem("copy"); // the user deletes it while the request is on its way
+      return at;
+    };
+    await sync(A);
+    server.api.insertDoc = insert;
+    await sync(A);
+    await sync(A);
+    expect(A.paths("document")).toEqual([]);
+    expect(server.live("document")).toEqual([]);
+  });
+
+  it("a deletion the server does not apply stays queued instead of the item coming back silently", async () => {
+    A.createDoc("copy", "body");
+    await settle();
+    A.deleteItem("copy");
+    const del = server.api.deleteDoc;
+    server.api.deleteDoc = async () => false; // e.g. the row could not be matched
+    const res = await sync(A);
+    expect(res.errors.join()).toMatch(/did not apply the deletion/);
+    expect(A.tombs).toHaveLength(1);
+    server.api.deleteDoc = del;
+    await sync(A);
+    expect(A.tombs).toEqual([]);
+    expect(server.live("document")).toEqual([]);
+    expect(A.paths("document")).toEqual([]);
+  });
+
+  it("deleted and recreated by a late autosave, the old row is not resurrected", async () => {
+    A.createDoc("copy", "body");
+    await settle();
+    A.deleteItem("copy");
+    A.createDoc("copy", "body"); // a pending editor save writes the file back
+    await sync(A);
+    await sync(A);
+    expect(server.live("document").map((d) => d.path)).toEqual(["copy"]);
+    expect(A.paths("document")).toEqual(["copy"]);
   });
 });
 
@@ -713,8 +789,8 @@ describe("an interrupted first push", () => {
     A.createDoc("HW", "body");
     // the row reaches the server, but the device never learns about it
     state.dev = A;
-    A.call("set_item_id", { kind: "document", path: "HW", id: "~lost" });
-    await server.api.insertDoc("document", "~lost", "HW", "body");
+    A.call("set_item_id", { kind: "document", path: "HW", id: "!lost" });
+    await server.api.insertDoc("document", "!lost", "HW", "body");
     const res = await sync(A);
     expect(res.errors).toEqual([]);
     expect(res.conflicts).toEqual([]); // no "(conflict)" copy of itself

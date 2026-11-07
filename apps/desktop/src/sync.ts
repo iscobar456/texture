@@ -56,18 +56,33 @@ const depth = (p: string) => p.split("/").length;
  * version that was deleted; if it was edited elsewhere in the meantime, the edit wins and the
  * normal pass below pulls it back.
  */
-async function syncDeletions(api: Api, user: string) {
+async function syncDeletions(api: Api, user: string, out: SyncResult) {
   for (const t of await invoke<Tombstone[]>("list_deletions", { user })) {
-    const done = await api.deleteDoc(t.kind, { id: t.id, path: t.path }, t.remote_at);
+    const id = t.id ? fixId(t.id) : null;
+    const done = await api.deleteDoc(t.kind, { id, path: t.path }, t.remote_at);
     // Files live under the id; items from before ids existed used their path as id.
-    const key = t.id ?? t.path;
+    const key = id ?? t.path;
     if (done && t.kind === "document") await api.removeDocFiles(key).catch(() => {});
     if (done && t.kind === "template") await api.removePreview("template", key).catch(() => {});
+    if (!done) {
+      // Normally the row changed or vanished since (an edit elsewhere wins over this delete). If it is live and
+      // still at the deleted version, the delete simply did not apply: keep it queued and say so, rather than
+      // forgetting it and letting the item come back on the next pull.
+      const stuck = (await api.listDocs(t.kind)).find(
+        (d) => !d.deleted_at && d.updated_at === t.remote_at && (id ? d.id === id : d.path === t.path),
+      );
+      if (stuck) {
+        out.errors.push(`${t.kind} ${JSON.stringify(t.path)}: the server did not apply the deletion`);
+        continue;
+      }
+    }
     await invoke("clear_deletion", { user, kind: t.kind, path: t.path, id: t.id ?? null });
   }
 }
 
-const newId = () => `~${crypto.randomUUID()}`;
+/** '!' cannot appear in a name, so a generated id never equals a path. (Storage rejects '~', which ids briefly used.) */
+const newId = () => `!${crypto.randomUUID()}`;
+const fixId = (id: string) => (id.startsWith("~") ? `!${id.slice(1)}` : id);
 
 /**
  * Local-first sync of one kind of item. Items are matched by id, never by path, so a rename is an update
@@ -88,6 +103,13 @@ async function syncKind(api: Api, user: string, kind: DocKind, out: SyncResult):
   const livePath = new Map(rows.filter((d) => !d.deleted_at).map((d) => [d.path, d]));
   const items = (await invoke<LocalDoc[]>(LIST_CMD[kind], { user })).filter((d) => !d.builtin);
 
+  // Ids from the short-lived '~' form map to their '!' form (migration 0010 renamed the server rows).
+  for (const l of items) {
+    if (l.id && l.id !== fixId(l.id)) {
+      l.id = fixId(l.id);
+      await invoke("set_item_id", { user, kind, path: l.path, id: l.id });
+    }
+  }
   // Give every local item its identity.
   const claimed = new Set(items.map((d) => d.id).filter(Boolean));
   for (const l of items) {
@@ -137,7 +159,12 @@ async function syncKind(api: Api, user: string, kind: DocKind, out: SyncResult):
         ? await api.insertDoc(kind, l.id!, l.path, source)
         : await api.updateDoc(kind, l.id!, { path: l.path, source }, baseAt, undelete);
     if (at === null) return; // lost a race; the next pass will see the new server state
-    await invoke("mark_synced", { user, kind, path: l.path, pushed: source, remoteAt: at, id: l.id });
+    const kept = await invoke<boolean>("mark_synced", { user, kind, path: l.path, pushed: source, remoteAt: at, id: l.id });
+    if (kept === false) {
+      // Deleted here while the push was on its way: the row just written must not outlive it.
+      await api.deleteDoc(kind, { id: l.id, path: l.path }, at);
+      return;
+    }
     // Later items in this pass see the name as taken (or freed, when this was a rename).
     for (const [p, d] of livePath) if (d.id === l.id) livePath.delete(p);
     livePath.set(l.path, { id: l.id!, path: l.path, updated_at: at, deleted_at: null });
@@ -282,7 +309,7 @@ export async function runSync(api: Api, user: string, current: string | null): P
   running = true;
   const out: SyncResult = { pulled: [], conflicts: [], removed: [], renamed: [], touched: new Set(), errors: [], configPulled: false };
   try {
-    await syncDeletions(api, user);
+    await syncDeletions(api, user, out);
     await (await syncKind(api, user, "template", out))();
     // A problem here (e.g. the server table is not set up yet) must not stop documents from syncing.
     await syncKind(api, user, "config", out).then((done) => done()).catch((e) => out.errors.push(`config: ${e?.message ?? e}`));

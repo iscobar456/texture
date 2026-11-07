@@ -48,7 +48,7 @@ export const DEFAULTS: Settings = {
   wrap: true,
   lineNumbers: true,
   autoCompile: false,
-  defaultTemplate: "Homework",
+  defaultTemplate: "Blank",
   ocrModel: "claude-sonnet-5-5",
   formatWrap: false,
   formatWrapLen: 80,

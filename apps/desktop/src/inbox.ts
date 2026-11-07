@@ -544,14 +544,6 @@ export function initInbox(deps: InboxDeps) {
       : which === "trash" ? ["Trash is empty", `Deleted photos stay here for ${TRASH_DAYS} days.`]
       : ["No photos waiting", "Photos you take in the Texture phone app appear here."];
     el.innerHTML = `${EMPTY_ICON}<p class="inbox-empty-title">${title}</p><p class="muted">${hint}</p>`;
-    if (which === "pending") {
-      const all = [...lists.pending, ...lists.used, ...lists.trash];
-      const newest = all.map((p) => p.created_at).sort().pop();
-      const last = document.createElement("p");
-      last.className = "muted";
-      last.textContent = newest ? `Last photo received ${ago(newest)}.` : "Nothing has arrived from your phone yet.";
-      el.append(last);
-    }
     return el;
   }
 

@@ -195,11 +195,20 @@ export function createApi(url: string, anonKey: string) {
      * Deletions recorded before ids existed carry no id and are found by path.
      */
     async deleteDoc(kind: DocKind, ref: { id?: string | null; path: string }, baseAt: string): Promise<boolean> {
-      let q = sb.from(table(kind)).update({ deleted_at: new Date().toISOString() });
-      q = ref.id && kind !== "config" ? q.eq("id", ref.id) : q.eq("path", ref.path);
-      const { data, error } = await q.eq("updated_at", baseAt).is("deleted_at", null).select("path");
-      if (error) throw error;
-      return data.length > 0;
+      // By id; failing that by path, since the same version on the same path is the same row.
+      const keys: [string, string][] = ref.id && kind !== "config" ? [["id", ref.id], ["path", ref.path]] : [["path", ref.path]];
+      for (const [col, value] of keys) {
+        const { data, error } = await sb
+          .from(table(kind))
+          .update({ deleted_at: new Date().toISOString() })
+          .eq(col, value)
+          .eq("updated_at", baseAt)
+          .is("deleted_at", null)
+          .select("path");
+        if (error) throw error;
+        if (data.length > 0) return true;
+      }
+      return false;
     },
     async setPreviewAt(kind: "document" | "template", id: string, marker: string): Promise<boolean> {
       const { data, error } = await sb.from(table(kind)).update({ preview_at: marker }).eq("id", id).is("deleted_at", null).select("id");

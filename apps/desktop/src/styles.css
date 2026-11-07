@@ -16,6 +16,13 @@ header { display: flex; gap: 8px; align-items: center; padding: 5px 10px; border
 main { flex: 1; display: grid; grid-template-columns: var(--cols, minmax(0, 1fr) 6px minmax(0, 1fr) 6px 260px); min-height: 0; }
 main > * { min-height: 0; overflow: auto; border-right: 1px solid #8884; }
 #editor { position: relative; }
+#editor.snip-mode { display: flex; flex-direction: column; }
+#editor.snip-mode .cm-editor { flex: 1 1 0; height: auto; min-height: 0; }
+#snip-bar { flex: none; display: flex; align-items: center; gap: 8px; padding: 4px 8px; border-bottom: 1px solid var(--border); background: var(--surface); }
+#snip-bar[hidden] { display: none; }
+#snip-bar .spacer { flex: 1; }
+#snip-bar button { height: var(--ctl-h); padding: 0 10px; border: 1px solid var(--border); border-radius: var(--radius); background: var(--hover); color: inherit; cursor: pointer; white-space: nowrap; }
+#snip-bar button:hover { background: var(--press); }
 #editor .cm-editor { height: 100%; }
 #editor-note { position: absolute; left: 12px; bottom: 10px; z-index: 5; max-width: calc(100% - 24px); padding: 5px 10px; border: 1px solid var(--border);
   border-radius: 6px; background: var(--surface); box-shadow: 0 4px 14px rgba(0, 0, 0, .25); font-size: .93em; pointer-events: none; }
@@ -167,14 +174,6 @@ html:root[data-editor-theme="one-dark"] {
 #menu-list kbd { border: none; background: none; padding: 0; opacity: .55; font-size: .9em; }
 #menu-list hr { margin: 4px 6px; border: none; border-top: 1px solid var(--border); }
 
-/* about dialog */
-#about-dialog { width: min(440px, 94vw); }
-#about-body { padding: 4px 20px 20px; }
-#about-body h2 { margin: 8px 0 0; font-size: 1.6em; }
-#about-body ul { margin: 0 0 12px; padding-left: 1.2em; }
-#about-body li { margin-bottom: 6px; }
-#about-body p { margin: 8px 0; }
-
 /* shortcuts dialog */
 #shortcuts-dialog { width: min(720px, 94vw); height: min(620px, 88vh); }
 #shortcuts-dialog[open] { display: flex; flex-direction: column; }
@@ -197,11 +196,17 @@ kbd { display: inline-block; padding: 0 6px; border: 1px solid #8886; border-bot
   font-size: .85em; white-space: pre-wrap; }
 #snip-errors[hidden] { display: none; }
 #snip-body { flex: 1; overflow: auto; padding: 4px 16px 16px; }
-#snip-body section { margin-top: 14px; }
+#snip-body section { margin-top: 18px; padding-top: 14px; border-top: 1px solid var(--border); }
+#snip-body section:first-child { margin-top: 6px; padding-top: 0; border-top: none; }
 #snip-body h4 { margin: 0; font-size: .95em; }
 #snip-body p { margin: 2px 0 6px; }
-.bi-rows { display: grid; grid-template-columns: minmax(140px, max-content) 1fr auto; gap: 4px 16px; align-items: baseline; }
+.bi-rows { display: grid; grid-template-columns: minmax(140px, max-content) 1fr auto; gap: 0; align-items: baseline; }
+/* every cell carries the divider and padding, so each row reads as a unit and the line runs unbroken */
+.bi-rows > * { padding: 7px 8px; border-top: 1px solid var(--border); }
+.bi-rows > :nth-child(-n+3) { border-top: none; }
 .bi-rows code { white-space: pre-wrap; }
+/* the trigger is bold so it stands apart from what it inserts */
+.bi-rows > code { font-weight: 600; }
 .bi-cols { display: flex; flex-wrap: wrap; gap: 4px 14px; }
 
 /* pane layout */
@@ -322,7 +327,7 @@ dialog[open] { animation: dlg-in .12s ease-out; }
 .dlg-head > strong, #crumbs { font-weight: 600; font-size: 1.05em; }
 #crumbs { display: flex; align-items: center; gap: 2px; min-width: 0; }
 .crumb { border: none; background: none; padding: 2px 4px; border-radius: 4px; color: inherit; cursor: pointer; opacity: .65; }
-.crumb:hover { opacity: 1; background: var(--hover); }
+.crumb:hover { opacity: 1; background: none; }
 .crumb:last-child { opacity: 1; font-weight: 600; cursor: default; background: none; }
 .icon-btn { display: grid; place-items: center; width: var(--ctl-h); height: var(--ctl-h); padding: 0; border: none; border-radius: var(--radius);
   background: none; color: inherit; cursor: pointer; opacity: .75; }
@@ -376,7 +381,7 @@ dialog .row button[value="ok"], dialog .row button.primary, #set-ocr-save, .dlg-
 .tabs button[aria-selected="true"] { opacity: 1; border-bottom-color: var(--cm-keyword); }
 .subbar { display: flex; align-items: center; gap: 6px; padding: 4px 10px; min-height: 38px; border-bottom: 1px solid var(--border); flex: none; }
 .subbar[hidden], .grid[hidden] { display: none; }
-#new-folder[hidden], #new-document[hidden] { display: none; }
+#new-folder[hidden], #new-document[hidden], #new-tpl[hidden] { display: none; }
 
 /* photo inbox */
 .photo { border: 1px solid var(--border); border-radius: 8px; padding: 8px; margin-bottom: 10px; background: var(--surface); }

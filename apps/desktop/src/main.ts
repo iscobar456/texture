@@ -30,7 +30,6 @@ import { initSnippetsUi } from "./snippets-ui";
 import { initShortcutsUi } from "./shortcuts";
 import { initLayout } from "./layout";
 import { formatDoc } from "./format";
-import { getVersion } from "@tauri-apps/api/app";
 import { initDialogs } from "./dialogs";
 import { kebab, type MenuItem } from "./popup";
 import { initInbox } from "./inbox";
@@ -40,6 +39,7 @@ import { toast } from "./toast";
 import { initSwitcher, splitPath } from "./switcher";
 import { collectPending, initSyncUi, type Pending } from "./sync-ui";
 import { getCurrentWindow } from "@tauri-apps/api/window";
+import { openUrl } from "@tauri-apps/plugin-opener";
 import { DEFAULTS, EDITOR_THEMES, OCR_MODELS, loadSettings, saveSettings, applyAppearance, type Settings } from "./settings";
 
 pdfjs.GlobalWorkerOptions.workerSrc = workerUrl;
@@ -483,12 +483,34 @@ function showSnippetStatus() {
   }
 }
 
+const SNIPPETS_ORIGINAL_URL = "https://github.com/iscobar456/texture/blob/main/apps/desktop/src/default-snippets.toml";
+/** What was open before the snippets file, so Back can return to it. */
+let snippetsReturn: { template: string | null } = { template: null };
+
+/** Shows the snippets bar above the editor only while the snippets file is the thing being edited. */
+function syncSnippetsBar() {
+  $("snip-bar").hidden = !snippetsOpen;
+  $("editor").classList.toggle("snip-mode", snippetsOpen);
+}
+
+async function closeSnippetsFile() {
+  if (snippetsReturn.template !== null) await openTemplate(snippetsReturn.template);
+  else if (docPath) await openDocument(docPath);
+  else await openAnyDocument();
+}
+
+$("snip-back").addEventListener("click", () => void closeSnippetsFile());
+$("snip-restore").addEventListener("click", () => $<HTMLDialogElement>("snip-reset-dialog").showModal());
+$("snip-original").addEventListener("click", () => void openUrl(SNIPPETS_ORIGINAL_URL).catch(() => status("Could not open the browser")));
+
 async function openSnippetsFile() {
   await flushSave();
+  if (!snippetsOpen) snippetsReturn = { template: templateName };
   const text = (await invoke<string | null>("load_config", { user, name: SNIPPETS_CONFIG })) ?? DEFAULT_SNIPPETS_TOML;
   viewEpoch++;
   snippetsOpen = true;
   templateName = null;
+  syncSnippetsBar();
   if (view) setDoc(text);
   else createEditor(text);
   applyEditorMode();
@@ -690,7 +712,7 @@ const switcher = initSwitcher({
   current: () => (templateName === null && !snippetsOpen ? docPath : ""),
   open: (path) => openDocument(path),
   create: async (path) => {
-    await invoke("create_document", { user, path, template: settings.defaultTemplate });
+    await invoke("create_document", { user, path, template: await defaultTemplateName() });
     await openDocument(path);
   },
 });
@@ -768,11 +790,6 @@ menuList.addEventListener("click", () => {
 });
 document.addEventListener("click", () => setMenu(false));
 document.addEventListener("keydown", (e) => { if (e.key === "Escape" && !menuList.hidden) setMenu(false); });
-$("open-about").addEventListener("click", async () => {
-  $("about-version").textContent = await getVersion().catch(() => "");
-  $("about-user").textContent = (await api.sb.auth.getSession()).data.session?.user.email ?? "";
-  $<HTMLDialogElement>("about-dialog").showModal();
-});
 
 // ---- documents, folders, templates ----
 const lastKey = () => `texture:last:${user}`;
@@ -806,6 +823,7 @@ async function openDocument(path: string) {
   docPath = path;
   templateName = null;
   snippetsOpen = false;
+  syncSnippetsBar();
   try { localStorage.setItem(lastKey(), path); } catch {}
   const text = await invoke<string>("load_source", { user, path });
   if (view) setDoc(text);
@@ -826,6 +844,7 @@ async function openTemplate(name: string) {
   viewEpoch++;
   templateName = name;
   snippetsOpen = false;
+  syncSnippetsBar();
   const text = await invoke<string>("read_template", { user, name });
   if (view) setDoc(text);
   else createEditor(text);
@@ -910,6 +929,7 @@ async function renderPicker() {
     const items: MenuItem[] = [
       { label: "Rename…", run: () => askRename(path) },
       { label: "Move…", run: () => void askMove(path, kind) },
+      ...(kind === "document" ? [{ label: "Duplicate", run: () => void duplicate("document", path) }] : []),
       ...(kind === "document" ? [{ label: "Save as template…", run: () => askSaveTemplate(path) }] : []),
       { label: "Delete", danger: true, run: () => askDelete(path, kind) },
     ];
@@ -984,6 +1004,7 @@ async function setPickerTab(tab: PickerTab) {
   $("docs-subbar").hidden = !docs;
   $("new-folder").hidden = !docs;
   $("new-document").hidden = !docs;
+  $("new-tpl").hidden = docs;
   if (docs) await renderPicker();
   else await renderTemplates();
 }
@@ -1041,6 +1062,19 @@ async function doMove(from: string, to: string) {
   await invoke("move_item", { user, from, to });
   followMove(from, to);
   syncSoon();
+}
+
+/** Copies a document or template next to the original and shows where the copy is. */
+async function duplicate(kind: "document" | "template", path: string) {
+  try {
+    await flushSave();
+    const copy = await invoke<string>(kind === "document" ? "duplicate_document" : "duplicate_template", kind === "document" ? { user, path } : { user, name: path });
+    syncSoon();
+    void refreshPicker();
+    toast(`Created "${baseOf(copy)}"`);
+  } catch (err) {
+    toast(String(err));
+  }
 }
 
 let renameFrom = "";
@@ -1164,11 +1198,17 @@ $("delete-form").addEventListener("submit", async (e) => {
   syncSoon();
 });
 
+/** The user's default template if it still exists (e.g. not the removed "Homework" built-in), else Blank. */
+async function defaultTemplateName(): Promise<string> {
+  const templates = await invoke<TemplateInfo[]>("list_templates", { user });
+  return templates.some((t) => t.path === settings.defaultTemplate) ? settings.defaultTemplate : "Blank";
+}
+
 /** Opens some document, creating one if the account has none (e.g. after deleting the open one). */
 async function openAnyDocument() {
   let docs = await invoke<DocInfo[]>("list_documents", { user });
   if (!docs.length) {
-    await invoke("create_document", { user, path: "Untitled", template: "Homework" });
+    await invoke("create_document", { user, path: "Untitled", template: await defaultTemplateName() });
     docs = await invoke<DocInfo[]>("list_documents", { user });
   }
   await openDocument(docs[0].path);
@@ -1229,23 +1269,32 @@ let tplFrom = "";
 function askSaveTemplate(path: string) {
   tplOverwrite = false;
   tplFrom = path;
+  $("tpl-title").textContent = path ? "Save as template" : "New template";
   $("tpl-error").textContent = "";
-  $("tpl-ok").textContent = "Save";
+  $("tpl-ok").textContent = path ? "Save" : "Create";
   const input = $<HTMLInputElement>("tpl-name");
   dialogOpen($<HTMLDialogElement>("tpl-dialog"), input);
-  input.value = baseOf(path);
-  input.select();
+  if (path) {
+    input.value = baseOf(path);
+    input.select();
+  }
 }
+
+// An empty `tplFrom` means a brand-new template, started from the Blank skeleton.
+$("new-tpl").addEventListener("click", () => askSaveTemplate(""));
 
 $("tpl-form").addEventListener("submit", async (e) => {
   const submitter = (e as SubmitEvent).submitter as HTMLButtonElement | null;
   if (submitter?.value !== "ok") return;
+  const name = $<HTMLInputElement>("tpl-name").value.trim();
   try {
     await flushSave(); // so the template reflects what's on screen if this is the open document
     await invoke("save_template", {
       user,
-      name: $<HTMLInputElement>("tpl-name").value.trim(),
-      source: await invoke<string>("load_source", { user, path: tplFrom }),
+      name,
+      source: tplFrom
+        ? await invoke<string>("load_source", { user, path: tplFrom })
+        : await invoke<string>("read_template", { user, name: "Blank" }),
       overwrite: tplOverwrite,
     });
   } catch (err) {
@@ -1260,6 +1309,11 @@ $("tpl-form").addEventListener("submit", async (e) => {
     return;
   }
   syncSoon();
+  if (!tplFrom) {
+    // A new template opens straight away so it can be written.
+    $<HTMLDialogElement>("picker").close();
+    await openTemplate(name);
+  } else if ($<HTMLDialogElement>("picker").open && pickerTab === "templates") void renderTemplates();
 });
 
 // -- template manager (from the main menu): open to edit, or delete --
@@ -1309,7 +1363,8 @@ async function renderTemplates() {
   templateUrls.forEach((u) => URL.revokeObjectURL(u));
   templateUrls = [];
   const run = ++thumbRun;
-  const templates = await invoke<TemplateInfo[]>("list_templates", { user });
+  // The built-in Blank is only the fallback for new documents; it is not offered for editing here.
+  const templates = (await invoke<TemplateInfo[]>("list_templates", { user })).filter((t) => !t.builtin);
   const missing: { name: string; thumb: HTMLElement }[] = [];
   const cards = templates.map((t) => {
     const card = document.createElement("div");
@@ -1335,6 +1390,7 @@ async function renderTemplates() {
     card.append(
       thumb, title, meta,
       kebab($("picker"), [
+        { label: "Duplicate", run: () => void duplicate("template", t.path) },
         { label: "Rename…", disabled: t.builtin, run: () => askRename(t.path, true) },
         { label: "Delete", danger: true, disabled: t.builtin, run: () => askDelete(t.path, "template") },
       ]),
@@ -1342,6 +1398,7 @@ async function renderTemplates() {
     return card;
   });
   $("tpl-grid").replaceChildren(...cards);
+  if (!cards.length) $("tpl-grid").textContent = "No templates yet. Use New template… or save a document as a template.";
   // Starts once the dialog is open (the loop checks), after any saved thumbnails had a moment to load.
   setTimeout(() => void buildMissingThumbs(missing, run), 300);
 }

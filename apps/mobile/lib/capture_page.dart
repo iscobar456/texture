@@ -120,7 +120,7 @@ class _CapturePageState extends State<CapturePage>
     with WidgetsBindingObserver {
   RealtimeChannel? _channel;
   Timer? _poll;
-  bool _foreground = true;
+  bool _checking = false; // a delivery lookup is in flight
   final _picker = ImagePicker();
   final _uploads = <_Upload>[]; // newest first, persisted by _History
 
@@ -137,9 +137,10 @@ class _CapturePageState extends State<CapturePage>
     // Realtime alone is not dependable on a phone (the socket can stall or drop
     // without notice), so while a sent photo is not yet delivered, also ask now
     // and then. A cheap query that stops by itself once everything is delivered.
-    _poll = Timer.periodic(const Duration(seconds: 4), (_) {
-      if (_foreground) _checkDelivery();
-    });
+    // Not gated on lifecycle state: timers don't fire while the app is
+    // suspended anyway, and an `inactive`/`hidden` event with no `resumed`
+    // after it used to switch polling off for good.
+    _poll = Timer.periodic(const Duration(seconds: 4), (_) => _checkDelivery());
     // The desktop stamps delivered_at / status on the row; realtime only
     // works while foregrounded, so resume and (re)join also re-check.
     _channel = sb
@@ -165,7 +166,6 @@ class _CapturePageState extends State<CapturePage>
 
   @override
   void didChangeAppLifecycleState(AppLifecycleState state) {
-    _foreground = state == AppLifecycleState.resumed;
     if (state == AppLifecycleState.resumed) {
       _checkDelivery();
     }
@@ -173,15 +173,20 @@ class _CapturePageState extends State<CapturePage>
 
   /// Looks up the rows of sent photos not yet known to be delivered.
   Future<void> _checkDelivery() async {
+    if (_checking) return;
     final open = _uploads
         .where((u) => u.id != null && u.state == _State.sent && !u.delivered)
         .toList();
     if (open.isEmpty) return;
+    _checking = true;
     try {
+      // The timeout matters: a socket the OS killed while idle can hang
+      // without ever erroring, which would block every later check.
       final rows = await sb
           .from('photos')
           .select('id, delivered_at, status')
-          .inFilter('id', [for (final u in open) u.id!]);
+          .inFilter('id', [for (final u in open) u.id!])
+          .timeout(const Duration(seconds: 8));
       final byId = {for (final r in rows) r['id'] as String: r};
       var changed = false;
       for (final u in open) {
@@ -199,6 +204,8 @@ class _CapturePageState extends State<CapturePage>
       }
     } catch (_) {
       // Informational only; stay quiet if offline.
+    } finally {
+      _checking = false;
     }
   }
 

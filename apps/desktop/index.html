@@ -36,7 +36,6 @@
             <button role="menuitem" id="open-shortcuts"><span>Keyboard shortcuts…</span></button>
             <button role="menuitem" id="open-settings"><span>Settings…</span><kbd data-key="Mod-,"></kbd></button>
             <hr role="separator" />
-            <button role="menuitem" id="open-about"><span>About Texture</span></button>
             <button role="menuitem" id="sign-out"><span>Sign out</span></button>
           </div>
         </div>
@@ -49,7 +48,15 @@
         <button id="sync" class="sync-chip" title="Sync status - click for details"></button>
       </header>
       <main>
-        <section id="editor"><div id="editor-note" role="status" aria-live="polite" hidden></div></section>
+        <section id="editor">
+          <div id="snip-bar" hidden>
+            <button type="button" id="snip-back" title="Back to what you were editing">← Back</button>
+            <strong>Snippets file</strong>
+            <span class="spacer"></span>
+            <button type="button" id="snip-original" title="Open the default snippets file on GitHub">View original ↗</button>
+            <button type="button" id="snip-restore">Restore to default…</button>
+          </div>
+          <div id="editor-note" role="status" aria-live="polite" hidden></div></section>
         <div id="splitter" class="splitter" role="separator" aria-orientation="vertical" aria-label="Resize editor and preview"
              aria-valuemin="20" aria-valuemax="80" tabindex="0" title="Drag to resize (double-click to reset)"></div>
         <section id="preview">
@@ -281,25 +288,6 @@
       <div id="sync-body"></div>
     </dialog>
 
-    <dialog id="about-dialog">
-      <div class="dlg-head">
-        <strong>About Texture</strong>
-        <span class="spacer"></span>
-        <button type="button" class="cancel icon-btn" aria-label="Close" title="Close (Esc)"><svg viewBox="0 0 16 16" width="14" height="14" aria-hidden="true"><path d="M3.5 3.5l9 9M12.5 3.5l-9 9" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round"/></svg></button>
-      </div>
-      <div id="about-body">
-        <h2>Texture</h2>
-        <p class="muted">Version <span id="about-version"></span></p>
-        <p>Write homework in LaTeX on your computer and pull in photos of paper and whiteboard work from your phone, then export a PDF.</p>
-        <ul>
-          <li>Documents and templates are stored on this device and sync to your account, so everything works offline.</li>
-          <li>Photos you take in the Texture phone app arrive in the photo inbox. Insert them as images, or transcribe them to LaTeX with your own Anthropic API key.</li>
-          <li>Press Ctrl/Cmd+P to jump between documents.</li>
-        </ul>
-        <p class="muted">Signed in as <span id="about-user"></span></p>
-      </div>
-    </dialog>
-
     <dialog id="latex-dialog">
       <div class="dlg-head">
         <strong>Setting up LaTeX</strong>
@@ -333,6 +321,7 @@
         <span class="spacer"></span>
         <button id="new-folder">New folder…</button>
         <button id="new-document">New document…</button>
+        <button id="new-tpl" hidden>New template…</button>
         <button id="picker-close" class="icon-btn" aria-label="Close" title="Close (Esc)"><svg viewBox="0 0 16 16" width="14" height="14" aria-hidden="true"><path d="M3.5 3.5l9 9M12.5 3.5l-9 9" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round"/></svg></button>
       </div>
       <div id="docs-subbar" class="subbar">
@@ -395,7 +384,7 @@
 
     <dialog id="tpl-dialog">
       <form method="dialog" id="tpl-form">
-        <h3>Save as template</h3>
+        <h3 id="tpl-title">Save as template</h3>
         <input id="tpl-name" placeholder="Template name" maxlength="64" required />
         <p class="error" id="tpl-error"></p>
         <div class="row"><button type="button" class="cancel">Cancel</button><button id="tpl-ok" value="ok">Save</button></div>
