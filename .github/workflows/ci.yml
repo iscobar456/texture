@@ -33,22 +33,6 @@ jobs:
       - name: cargo check
         run: cargo check --locked
         working-directory: apps/desktop/src-tauri
-      - name: Build the Linux app
-        run: npm run tauri build
-        working-directory: apps/desktop
-        env:
-          # Baked into the frontend (the anon key is public by design). Empty on pull requests from forks.
-          VITE_SUPABASE_URL: ${{ secrets.VITE_SUPABASE_URL }}
-          VITE_SUPABASE_ANON_KEY: ${{ secrets.VITE_SUPABASE_ANON_KEY }}
-      - uses: actions/upload-artifact@v4
-        with:
-          name: texture-linux
-          path: |
-            apps/desktop/src-tauri/target/release/bundle/deb/*.deb
-            apps/desktop/src-tauri/target/release/bundle/rpm/*.rpm
-            apps/desktop/src-tauri/target/release/bundle/appimage/*.AppImage
-          if-no-files-found: error
-          retention-days: 14
 
   mobile:
     runs-on: ubuntu-24.04
@@ -62,16 +46,3 @@ jobs:
         working-directory: apps/mobile
       - run: flutter analyze --no-fatal-infos
         working-directory: apps/mobile
-      - name: Build the APK
-        # Signed with the debug key (no release keystore in CI), so it will not install over a release build.
-        run: |
-          flutter build apk --release \
-            --dart-define=SUPABASE_URL=${{ secrets.VITE_SUPABASE_URL }} \
-            --dart-define=SUPABASE_ANON_KEY=${{ secrets.VITE_SUPABASE_ANON_KEY }}
-        working-directory: apps/mobile
-      - uses: actions/upload-artifact@v4
-        with:
-          name: texture-android
-          path: apps/mobile/build/app/outputs/flutter-apk/app-release.apk
-          if-no-files-found: error
-          retention-days: 14

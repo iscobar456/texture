@@ -1,10 +1,14 @@
 name: Release
 
-# Push a tag like v0.1.0 (or run manually) to build desktop installers for every platform and the Android APK into a draft GitHub release.
+# Manual only (macOS and Windows runners are billed at 10x and 2x). Run it from the Actions tab with a tag name
+# to build desktop installers for every platform and the Android APK into a draft GitHub release.
+# Linux and Android are normally built locally and attached with `gh release create`.
 on:
-  push:
-    tags: ["v*"]
   workflow_dispatch:
+    inputs:
+      tag:
+        description: Release tag, e.g. v0.2.1 (created on the selected branch if it does not exist)
+        required: true
 
 jobs:
   build:
@@ -51,8 +55,8 @@ jobs:
           VITE_SUPABASE_ANON_KEY: ${{ secrets.VITE_SUPABASE_ANON_KEY }}
         with:
           projectPath: apps/desktop
-          tagName: ${{ github.ref_name }}
-          releaseName: Texture ${{ github.ref_name }}
+          tagName: ${{ inputs.tag }}
+          releaseName: Texture ${{ inputs.tag }}
           releaseDraft: true
           args: ${{ matrix.args }}
 
@@ -97,10 +101,10 @@ jobs:
           flutter build apk --release \
             --dart-define=SUPABASE_URL=${{ secrets.VITE_SUPABASE_URL }} \
             --dart-define=SUPABASE_ANON_KEY=${{ secrets.VITE_SUPABASE_ANON_KEY }}
-          mv build/app/outputs/flutter-apk/app-release.apk "build/Texture-${{ github.ref_name }}.apk"
+          mv build/app/outputs/flutter-apk/app-release.apk "build/Texture-${{ inputs.tag }}.apk"
         working-directory: apps/mobile
       - uses: softprops/action-gh-release@v2
         with:
-          tag_name: ${{ github.ref_name }}
+          tag_name: ${{ inputs.tag }}
           draft: true
-          files: apps/mobile/build/Texture-${{ github.ref_name }}.apk
+          files: apps/mobile/build/Texture-${{ inputs.tag }}.apk
