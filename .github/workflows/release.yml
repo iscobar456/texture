@@ -1,13 +1,13 @@
 name: Release
 
-# Manual only (macOS and Windows runners are billed at 10x and 2x). Run it from the Actions tab with a tag name
-# to build desktop installers for every platform and the Android APK into a draft GitHub release.
-# Linux and Android are normally built locally and attached with `gh release create`.
+# Manual only (macOS and Windows runners are billed at 10x and 2x). Builds just the macOS and Windows installers and
+# attaches them to the release (draft or published) for the given tag. Linux and Android are built locally with
+# scripts/release.sh, which creates the draft release; run this afterwards with the same tag.
 on:
   workflow_dispatch:
     inputs:
       tag:
-        description: Release tag, e.g. v0.2.1 (created on the selected branch if it does not exist)
+        description: Tag of the existing release to attach to, e.g. v0.3.0 (created as a draft if there is none)
         required: true
 
 jobs:
@@ -16,8 +16,6 @@ jobs:
       fail-fast: false
       matrix:
         include:
-          - os: ubuntu-24.04
-            args: ""
           - os: macos-latest # Apple silicon
             args: "--target aarch64-apple-darwin"
             rust-targets: aarch64-apple-darwin
@@ -41,11 +39,6 @@ jobs:
       - uses: swatinem/rust-cache@v2
         with:
           workspaces: apps/desktop/src-tauri
-      - name: Install Tauri system dependencies
-        if: startsWith(matrix.os, 'ubuntu')
-        run: |
-          sudo apt-get update
-          sudo apt-get install -y libwebkit2gtk-4.1-dev libappindicator3-dev librsvg2-dev patchelf
       - run: npm ci
       - uses: tauri-apps/tauri-action@v0
         env:
@@ -59,52 +52,3 @@ jobs:
           releaseName: Texture ${{ inputs.tag }}
           releaseDraft: true
           args: ${{ matrix.args }}
-
-  android:
-    # After the desktop jobs so the draft release already exists and the two don't race to create it.
-    needs: build
-    runs-on: ubuntu-24.04
-    permissions:
-      contents: write
-    steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-java@v4
-        with:
-          distribution: temurin
-          java-version: 17
-      - uses: subosito/flutter-action@v2
-        with:
-          channel: stable
-          cache: true
-      - name: Write the signing key
-        # Secrets: ANDROID_KEYSTORE_BASE64 (base64 of the .jks), ANDROID_KEYSTORE_PASSWORD, ANDROID_KEY_ALIAS,
-        # ANDROID_KEY_PASSWORD. Keep the same keystore forever: phones refuse updates signed with a different key.
-        env:
-          KEYSTORE_BASE64: ${{ secrets.ANDROID_KEYSTORE_BASE64 }}
-          STORE_PASSWORD: ${{ secrets.ANDROID_KEYSTORE_PASSWORD }}
-          KEY_ALIAS: ${{ secrets.ANDROID_KEY_ALIAS }}
-          KEY_PASSWORD: ${{ secrets.ANDROID_KEY_PASSWORD }}
-        run: |
-          # Tolerate line breaks, spaces and quotes that crept in when the secret was pasted.
-          printf '%s' "$KEYSTORE_BASE64" | tr -d ' \r\n\t"' | base64 -d > apps/mobile/android/release.jks
-          keytool -list -keystore apps/mobile/android/release.jks -storepass "$STORE_PASSWORD" -alias "$KEY_ALIAS" > /dev/null
-          {
-            echo "storeFile=release.jks"
-            echo "storePassword=$STORE_PASSWORD"
-            echo "keyAlias=$KEY_ALIAS"
-            echo "keyPassword=$KEY_PASSWORD"
-          } > apps/mobile/android/key.properties
-      - run: flutter pub get
-        working-directory: apps/mobile
-      - name: Build APK
-        run: |
-          flutter build apk --release \
-            --dart-define=SUPABASE_URL=${{ secrets.VITE_SUPABASE_URL }} \
-            --dart-define=SUPABASE_ANON_KEY=${{ secrets.VITE_SUPABASE_ANON_KEY }}
-          mv build/app/outputs/flutter-apk/app-release.apk "build/Texture-${{ inputs.tag }}.apk"
-        working-directory: apps/mobile
-      - uses: softprops/action-gh-release@v2
-        with:
-          tag_name: ${{ inputs.tag }}
-          draft: true
-          files: apps/mobile/build/Texture-${{ inputs.tag }}.apk
