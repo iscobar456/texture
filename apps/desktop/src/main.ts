@@ -50,7 +50,12 @@ type TemplateInfo = { path: string; builtin: boolean; dirty: boolean; has_previe
 type FolderInfo = { path: string };
 
 const $ = <T extends HTMLElement>(id: string) => document.getElementById(id) as T;
-const status = (s: string) => ($("status").textContent = s);
+// Keyboard-navigation marker: set when Tab is pressed, cleared on any pointer press.
+window.addEventListener("keydown", (e) => { if (e.key === "Tab") document.documentElement.setAttribute("data-keynav", ""); }, true);
+window.addEventListener("pointerdown", () => document.documentElement.removeAttribute("data-keynav"), true);
+
+/** One-off notices (export result, conflicts, errors) appear as toasts, not in the header. */
+const status = (s: string) => { if (s) toast(s); };
 /** A short-lived note over the bottom of the editor, for results of editor actions (e.g. Format). */
 let noteTimer = 0;
 function editorNote(s: string) {
@@ -406,7 +411,6 @@ $("export-pdf").addEventListener("click", async () => {
   });
   if (!dest) return;
   if (!dest.toLowerCase().endsWith(".pdf")) dest += ".pdf";
-  status("Exporting…");
   try {
     await flushSave();
     await invoke("export_pdf", { user, path: target, source: source(), scratch: templateName !== null, dest });
@@ -1040,29 +1044,36 @@ async function doMove(from: string, to: string) {
 }
 
 let renameFrom = "";
-function askRename(path: string) {
+let renameTemplate = false;
+function askRename(path: string, template = false) {
   renameFrom = path;
+  renameTemplate = template;
   $("rename-error").textContent = "";
   dialogOpen($<HTMLDialogElement>("rename-dialog"), $<HTMLInputElement>("rename-name"));
-  $<HTMLInputElement>("rename-name").value = baseOf(path);
+  $<HTMLInputElement>("rename-name").value = template ? path : baseOf(path);
   $<HTMLInputElement>("rename-name").select();
 }
 
 $("rename-form").addEventListener("submit", async (e) => {
   const submitter = (e as SubmitEvent).submitter as HTMLButtonElement | null;
   if (submitter?.value !== "ok") return;
-  const parent = parentOf(renameFrom);
+  const parent = renameTemplate ? "" : parentOf(renameFrom);
   const name = $<HTMLInputElement>("rename-name").value.trim();
   const to = parent ? `${parent}/${name}` : name;
   if (to === renameFrom) return;
   try {
-    await doMove(renameFrom, to);
+    if (renameTemplate) {
+      await flushSave();
+      await invoke("rename_template", { user, from: renameFrom, to });
+      syncSoon();
+      if (templateName === renameFrom) await openTemplate(to);
+    } else await doMove(renameFrom, to);
   } catch (err) {
     e.preventDefault();
     $("rename-error").textContent = String(err);
     return;
   }
-  void renderPicker();
+  void refreshPicker();
 });
 
 let moveFrom = "";
@@ -1324,6 +1335,7 @@ async function renderTemplates() {
     card.append(
       thumb, title, meta,
       kebab($("picker"), [
+        { label: "Rename…", disabled: t.builtin, run: () => askRename(t.path, true) },
         { label: "Delete", danger: true, disabled: t.builtin, run: () => askDelete(t.path, "template") },
       ]),
     );
@@ -1375,6 +1387,15 @@ async function runPass() {
     if (!navigator.onLine) return syncUi.failed("No network connection");
     const res = await runSync(api, user, docPath || null);
     if (res === null) return syncUi.skipped();
+    // Renamed or moved on another device: keep the editor pointed at the same thing.
+    for (const r of res.renamed) {
+      if (r.kind === "template") {
+        if (templateName === r.from) {
+          templateName = r.to;
+          setDocLabel("Template / ", r.to);
+        }
+      } else if (templateName === null && !snippetsOpen) followMove(r.from, r.to);
+    }
     // Reload the open document if the server copy replaced it. flushSave() above means no edits were lost.
     if (res.configPulled) {
       const t = await invoke<string | null>("load_config", { user, name: SNIPPETS_CONFIG });
@@ -1425,7 +1446,9 @@ void getCurrentWindow().onCloseRequested(async (event) => {
   await win.destroy();
 });
 
-window.addEventListener("online", () => void doSync());
+window.addEventListener("online", () => { void doSync(); if (user) void inbox.refresh(); });
+// Coming back to the window (e.g. after a long break) catches photos whose realtime events were missed.
+window.addEventListener("focus", () => { if (user) void inbox.refresh(); });
 setInterval(() => void doSync(), 60_000);
 
 // ---- photo inbox ----

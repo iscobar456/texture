@@ -13,7 +13,6 @@ html, body { height: 100%; margin: 0; }
 dialog .row { display: flex; gap: 8px; justify-content: flex-end; }
 .spacer { flex: 1; }
 header { display: flex; gap: 8px; align-items: center; padding: 5px 10px; border-bottom: 1px solid #8884; }
-#status { opacity: .7; font-size: .93em; margin-left: 4px; }
 main { flex: 1; display: grid; grid-template-columns: var(--cols, minmax(0, 1fr) 6px minmax(0, 1fr) 6px 260px); min-height: 0; }
 main > * { min-height: 0; overflow: auto; border-right: 1px solid #8884; }
 #editor { position: relative; }
@@ -143,14 +142,18 @@ html:root[data-editor-theme="one-dark"] {
 .hbtn { display: inline-flex; align-items: center; gap: 7px; height: var(--ctl-h); padding: 0 10px; border: 1px solid transparent;
   border-radius: var(--radius); background: none; color: inherit; cursor: pointer; white-space: nowrap; }
 .hbtn:hover { background: var(--hover); }
+.hbtn:focus-visible, .sync-chip:focus-visible { outline: none; }
+/* A faint ring only after the user has pressed Tab (see keyboard-nav in main.ts), never for focus restored after a click. */
+:root[data-keynav] :is(.hbtn, .sync-chip):focus-visible { outline: 2px solid #8886; outline-offset: -2px; }
 .hbtn:active, .hbtn[aria-expanded="true"] { background: var(--press); }
 .hbtn svg { flex: none; opacity: .85; }
-:is(.hbtn, .sync-chip, #menu-list button, .card, #switcher-list [role="option"]):focus-visible { outline: 2px solid var(--cm-keyword); outline-offset: -2px; }
+:is(#menu-list button, .card, #switcher-list [role="option"]):focus-visible { outline: 2px solid var(--cm-keyword); outline-offset: -2px; }
 #doc-button { max-width: min(560px, 48vw); min-width: 0; }
 .crumb { display: inline-flex; align-items: baseline; min-width: 0; }
 #crumb-dir { opacity: .6; max-width: 220px; overflow: hidden; text-overflow: ellipsis; white-space: pre; }
 #crumb-name { font-weight: 600; max-width: 280px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 #doc-dirty { margin-left: 2px; }
+#doc-button .crumb:hover { text-decoration: none; background: none; opacity: .65; cursor: inherit; }
 
 /* header menu */
 .menu { position: relative; }
@@ -267,8 +270,10 @@ kbd { display: inline-block; padding: 0 6px; border: 1px solid #8886; border-bot
 @media (prefers-reduced-motion: reduce) { .spinner { animation-duration: 3s; } }
 
 /* sync chip + panel */
-.sync-chip { display: inline-flex; align-items: center; gap: 7px; height: var(--ctl-h); padding: 0 12px; border: 1px solid var(--border);
-  border-radius: 999px; background: none; color: inherit; cursor: pointer; white-space: nowrap; }
+.sync-chip { display: inline-flex; align-items: center; justify-content: center; gap: 7px; height: var(--ctl-h); min-width: var(--ctl-h); padding: 0 8px;
+  border: 1px solid transparent; border-radius: 999px; background: none; color: inherit; cursor: pointer; white-space: nowrap; }
+.sync-chip.ok .dot { opacity: .55; }
+.sync-chip.loud { padding: 0 12px; border-color: var(--border); }
 .sync-chip:hover { background: #8882; }
 .dot { width: 8px; height: 8px; border-radius: 50%; background: #8888; flex: none; display: inline-block; }
 .sync-chip.ok .dot { background: #3a9a5b; }
@@ -336,8 +341,9 @@ dialog .row { margin-top: 8px; }
   background: var(--hover); color: inherit; cursor: pointer; white-space: nowrap; }
 :is(dialog .row button, .dlg-head > button:not(.icon-btn), #sync-now, #snip-edit, #snip-reset, #settings-reset,
     #set-ocr-save, #set-ocr-test, #set-ocr-remove, #set-ocr-show, #quit-now, #login button):hover:not(:disabled) { background: var(--press); }
-:is(dialog .row button, .dlg-head > button, #sync-now, #snip-edit, #snip-reset, #settings-reset,
+:is(dialog .row button, .dlg-head > button, #snip-edit, #snip-reset, #settings-reset,
     #set-ocr-save, #set-ocr-test, #set-ocr-remove, #set-ocr-show, #quit-now, #login button):focus-visible { outline: 2px solid var(--cm-keyword); outline-offset: 1px; }
+#sync-now:focus-visible:not(:disabled) { background: var(--press); outline: none; }
 :is(dialog .row button, #sync-now, #login button, .ocr-key button):disabled { opacity: .5; cursor: default; }
 dialog .row button[value="ok"], dialog .row button.primary, #set-ocr-save, .dlg-head > button.primary, #login button {
   background: var(--cm-keyword); border-color: transparent; color: Canvas; font-weight: 600; }

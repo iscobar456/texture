@@ -193,20 +193,35 @@ export function initInbox(deps: InboxDeps) {
     return running;
   }
 
+  function withTimeout<T>(p: Promise<T>, ms: number): Promise<T> {
+    return new Promise<T>((resolve, reject) => {
+      const t = setTimeout(() => reject(new Error("timeout")), ms);
+      p.then((v) => { clearTimeout(t); resolve(v); }, (e) => { clearTimeout(t); reject(e); });
+    });
+  }
+
   async function load() {
     try {
       // The photos waiting must always show. "Used" and "Trash" are extras: if they cannot be read (for example
       // before the matching database migration is applied), they are simply left out.
-      const [pending, used, trash] = await Promise.all([
-        deps.api().listPending(),
-        deps.api().listUsed().catch(() => [] as Photo[]),
-        deps.api().listTrashed().catch(() => [] as Photo[]),
-      ]);
+      // After a long sleep the old connection can be dead and a request never settles; without a limit the shared
+      // in-flight refresh would hang forever (spinner stuck, every later refresh joining it).
+      const [pending, used, trash] = await withTimeout(
+        Promise.all([
+          deps.api().listPending(),
+          deps.api().listUsed().catch(() => [] as Photo[]),
+          deps.api().listTrashed().catch(() => [] as Photo[]),
+        ]),
+        15_000,
+      );
       lists = { pending: applyOrder(pending), used, trash };
       render();
       deps.onCount(pending.length);
       announce(pending);
       syncViewer();
+      // Only now has the photo really reached the inbox; let the phone know.
+      const undelivered = pending.filter((p) => p.delivered_at === null).map((p) => p.id);
+      if (undelivered.length) deps.api().markDelivered(undelivered).catch(() => {});
       // Housekeeping, once the list is on screen.
       const keep = [...pending, ...used, ...trash].map((p) => p.id);
       invoke("thumb_prune", { user: deps.user(), keep }).catch(() => {});
@@ -998,6 +1013,11 @@ export function initInbox(deps: InboxDeps) {
 
   async function openBatchOcr(ps: Photo[]) {
     if (!ps.length) return;
+    if (ps.length === 1) {
+      // A single photo gets the regular single-photo dialog
+      await openOcr(ps[0]);
+      return;
+    }
     if (deps.target() === null) throw new Error("Open a document to insert the transcriptions");
     const pos = await deps.pickInsertPoint("transcriptions");
     if (pos === null) return; // cancelled before anything was billed

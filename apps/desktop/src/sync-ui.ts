@@ -13,7 +13,7 @@ export type Pending = {
   snippetsDirty: boolean;
 };
 
-type Doc = { path: string; dirty: boolean; remote_at: string | null; has_preview?: boolean; preview_dirty?: boolean };
+type Doc = { path: string; dirty: boolean; remote_at: string | null; remote_path?: string | null; has_preview?: boolean; preview_dirty?: boolean };
 type Tombstone = { kind: string; path: string };
 
 /** Reads the local sync state (dirty flags, pending deletions). Local only; never touches the network. */
@@ -26,16 +26,17 @@ export async function collectPending(user: string): Promise<Pending> {
     invoke<Tombstone[]>("list_deletions", { user }),
   ]);
   const p: Pending = { items: [], dirtyDocs: new Set(), dirtyTemplates: new Set(), snippetsDirty: false };
+  const renamed = (d: Doc) => !!d.remote_path && d.remote_path !== d.path;
   for (const d of docs) {
-    if (d.dirty) {
+    if (d.dirty || renamed(d)) {
       p.dirtyDocs.add(d.path);
       p.items.push({ group: "Documents", label: d.remote_at ? d.path : `${d.path} (new)` });
     }
     if (d.preview_dirty && d.has_preview) p.items.push({ group: "Previews", label: d.path });
   }
-  for (const f of folders) if (f.dirty || f.remote_at === null) p.items.push({ group: "Folders", label: f.path });
+  for (const f of folders) if (f.dirty || renamed(f) || f.remote_at === null) p.items.push({ group: "Folders", label: f.path });
   for (const t of templates) {
-    if (!t.builtin && t.dirty) {
+    if (!t.builtin && (t.dirty || renamed(t))) {
       p.dirtyTemplates.add(t.path);
       p.items.push({ group: "Templates", label: t.path });
     }
@@ -101,7 +102,13 @@ export function initSyncUi(opts: {
     chip.replaceChildren();
     const dot = document.createElement("span");
     dot.className = tone === "busy" ? "spinner" : "dot";
-    chip.append(dot, text);
+    // Quiet by default: only offline and problem states show words; the full text is the tooltip.
+    chip.title = `${text} - click for details`;
+    chip.setAttribute("aria-label", `Sync status: ${text}`);
+    const loud = tone === "off" || tone === "bad";
+    chip.classList.toggle("loud", loud);
+    chip.append(dot);
+    if (loud) chip.append(text);
     if (dialog.open) renderPanel();
   }
 

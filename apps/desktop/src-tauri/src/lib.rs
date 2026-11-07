@@ -38,6 +38,11 @@ const BUILTIN_TEMPLATES: [(&str, &str); 2] =
 struct Meta {
     dirty: bool,
     remote_at: Option<String>,
+    /// Stable server identity. Unlike the path it survives renames; missing on items from before ids existed.
+    id: Option<String>,
+    /// The path the server had when this copy last matched it. A different current path means a local rename
+    /// that is still to be pushed.
+    remote_path: Option<String>,
     /// Marker of the server preview this local preview.png matches.
     preview_at: Option<String>,
     /// preview.png was rendered here and not uploaded yet.
@@ -49,6 +54,9 @@ struct Meta {
 struct Tombstone {
     kind: String,
     path: String,
+    /// Absent on deletions recorded before ids existed; those are found on the server by path.
+    #[serde(default)]
+    id: Option<String>,
     remote_at: String,
 }
 
@@ -57,6 +65,8 @@ struct DocInfo {
     path: String,
     dirty: bool,
     remote_at: Option<String>,
+    id: Option<String>,
+    remote_path: Option<String>,
     /// Start of the document body, shown when there is no rendered preview.
     snippet: String,
     has_preview: bool,
@@ -69,6 +79,8 @@ struct FolderInfo {
     path: String,
     dirty: bool,
     remote_at: Option<String>,
+    id: Option<String>,
+    remote_path: Option<String>,
 }
 
 #[derive(Serialize)]
@@ -76,6 +88,8 @@ struct TemplateInfo {
     path: String,
     dirty: bool,
     remote_at: Option<String>,
+    id: Option<String>,
+    remote_path: Option<String>,
     builtin: bool,
     /// A rendered thumbnail of the template's first page exists on this device.
     has_preview: bool,
@@ -90,9 +104,10 @@ fn valid_name(name: &str) -> Result<&str, String> {
         && name.len() <= 64
         && name == name.trim()
         && !name.starts_with('.')
+        && !name.ends_with('.')
         && name
             .chars()
-            .all(|c| c.is_alphanumeric() || matches!(c, ' ' | '-' | '_' | '(' | ')'));
+            .all(|c| c.is_alphanumeric() || matches!(c, ' ' | '-' | '_' | '(' | ')' | '.'));
     if ok { Ok(name) } else { Err(format!("invalid name: {name:?}")) }
 }
 
@@ -259,12 +274,20 @@ fn walk(dir: &std::path::Path, prefix: &str, docs: &mut Vec<DocInfo>, folders: &
                 path,
                 dirty: meta.dirty,
                 remote_at: meta.remote_at,
+                id: meta.id,
+                remote_path: meta.remote_path,
                 preview_at: meta.preview_at,
                 preview_dirty: meta.preview_dirty,
             });
         } else {
             let meta = read_meta(&p.join(".sync.json"));
-            folders.push(FolderInfo { path: path.clone(), dirty: meta.dirty, remote_at: meta.remote_at });
+            folders.push(FolderInfo {
+                path: path.clone(),
+                dirty: meta.dirty,
+                remote_at: meta.remote_at,
+                id: meta.id,
+                remote_path: meta.remote_path,
+            });
             walk(&p, &path, docs, folders);
         }
     }
@@ -452,6 +475,8 @@ fn list_templates(app: tauri::AppHandle, user: String) -> Result<Vec<TemplateInf
                 path,
                 dirty: meta.dirty,
                 remote_at: meta.remote_at,
+                id: meta.id,
+                remote_path: meta.remote_path,
                 builtin: false,
                 has_preview,
                 preview_at: meta.preview_at,
@@ -466,6 +491,8 @@ fn list_templates(app: tauri::AppHandle, user: String) -> Result<Vec<TemplateInf
                 path: name.into(),
                 dirty: false,
                 remote_at: None,
+                id: None,
+                remote_path: None,
                 builtin: true,
                 has_preview: dir.join(format!("{name}.preview.png")).is_file(),
                 preview_at: None,
@@ -550,10 +577,14 @@ fn apply_remote(
     source: String,
     remote_at: Option<String>,
     dirty: bool,
+    id: Option<String>,
+    remote_path: Option<String>,
 ) -> Result<(), String> {
     let set = move |m: &mut Meta| {
         m.dirty = dirty;
         m.remote_at = remote_at;
+        m.id = id;
+        m.remote_path = remote_path;
     };
     match kind.as_str() {
         "document" => {
@@ -593,6 +624,7 @@ fn mark_synced(
     path: String,
     pushed: String,
     remote_at: String,
+    id: String,
 ) -> Result<(), String> {
     let (file, meta_path) = match kind.as_str() {
         "document" => {
@@ -604,6 +636,8 @@ fn mark_synced(
             return update_meta(&dir.join(".sync.json"), |m| {
                 m.dirty = false;
                 m.remote_at = Some(remote_at);
+                m.id = Some(id);
+                m.remote_path = Some(path);
             });
         }
         "template" => template_paths(&app, &user, &path)?,
@@ -614,7 +648,22 @@ fn mark_synced(
     update_meta(&meta_path, |m| {
         m.dirty = !unchanged;
         m.remote_at = Some(remote_at);
+        m.id = Some(id);
+        m.remote_path = Some(path);
     })
+}
+
+/// Remembers an item's server identity before it is first pushed, so a push that is interrupted
+/// halfway is recognised (not duplicated) on the next pass.
+#[tauri::command]
+fn set_item_id(app: tauri::AppHandle, user: String, kind: String, path: String, id: String) -> Result<(), String> {
+    let meta_path = match kind.as_str() {
+        "document" => item_path(&app, &user, &path)?.join(".sync.json"),
+        "folder" => item_path(&app, &user, &path)?.join(".sync.json"),
+        "template" => template_paths(&app, &user, &path)?.1,
+        _ => return Err(format!("{kind:?} has no ids")),
+    };
+    update_meta(&meta_path, |m| m.id = Some(id))
 }
 
 #[tauri::command]
@@ -754,15 +803,30 @@ fn list_deletions(app: tauri::AppHandle, user: String) -> Result<Vec<Tombstone>,
 }
 
 #[tauri::command]
-fn clear_deletion(app: tauri::AppHandle, user: String, kind: String, path: String) -> Result<(), String> {
+fn clear_deletion(
+    app: tauri::AppHandle,
+    user: String,
+    kind: String,
+    path: String,
+    id: Option<String>,
+) -> Result<(), String> {
     let mut t = read_tombstones(&app, &user)?;
-    t.retain(|x| !(x.kind == kind && x.path == path));
+    t.retain(|x| !same_item(x, &kind, &path, id.as_deref()));
     write_tombstones(&app, &user, &t)
+}
+
+/// Same thing on the server: by id when both sides have one, otherwise by path.
+fn same_item(t: &Tombstone, kind: &str, path: &str, id: Option<&str>) -> bool {
+    t.kind == kind
+        && match (t.id.as_deref(), id) {
+            (Some(a), Some(b)) => a == b,
+            _ => t.path == path,
+        }
 }
 
 fn add_tombstones(app: &tauri::AppHandle, user: &str, new: Vec<Tombstone>) -> Result<(), String> {
     let mut t = read_tombstones(app, user)?;
-    t.retain(|x| !new.iter().any(|n| n.kind == x.kind && n.path == x.path));
+    t.retain(|x| !new.iter().any(|n| same_item(x, &n.kind, &n.path, n.id.as_deref())));
     t.extend(new);
     write_tombstones(app, user, &t)
 }
@@ -771,7 +835,7 @@ fn tombstones_for(items: &[(&'static str, String, Meta)]) -> Vec<Tombstone> {
     items
         .iter()
         .filter_map(|(k, p, m)| {
-            m.remote_at.clone().map(|r| Tombstone { kind: (*k).into(), path: p.clone(), remote_at: r })
+            m.remote_at.clone().map(|r| Tombstone { kind: (*k).into(), path: p.clone(), id: m.id.clone(), remote_at: r })
         })
         .collect()
 }
@@ -788,8 +852,21 @@ fn delete_item(app: tauri::AppHandle, user: String, path: String) -> Result<(), 
     fs::remove_dir_all(dir).map_err(|e| e.to_string())
 }
 
-/// Renames or moves a document or folder (they are the same operation: change the path).
-/// The server has no rename, so old paths are deleted and the new ones start as unsynced documents.
+/// Before an item's path changes, remember the path the server knows it by, so the next sync can tell a local
+/// rename from a remote one. Items the server has not seen need nothing.
+fn stamp_remote_paths(items: &[(&'static str, String, Meta)], app: &tauri::AppHandle, user: &str) -> Result<(), String> {
+    for (_, path, meta) in items {
+        if meta.remote_at.is_some() && meta.remote_path.is_none() {
+            let dir = item_path(app, user, path)?;
+            update_meta(&dir.join(".sync.json"), |m| m.remote_path = Some(path.clone()))?;
+        }
+    }
+    Ok(())
+}
+
+/// Renames or moves a document or folder (they are the same operation: change the path). Identity, sync state,
+/// images and preview travel with the directory; the next sync pushes the new path (and the new paths of
+/// everything inside a folder) as renames, not as delete + create.
 #[tauri::command]
 fn move_item(app: tauri::AppHandle, user: String, from: String, to: String) -> Result<(), String> {
     if to == from || to.starts_with(&format!("{from}/")) {
@@ -803,21 +880,78 @@ fn move_item(app: tauri::AppHandle, user: String, from: String, to: String) -> R
     if to_dir.exists() {
         return Err(format!("{to:?} already exists"));
     }
-    let items = collect_items(&from_dir, &from);
-    add_tombstones(&app, &user, tombstones_for(&items))?;
+    stamp_remote_paths(&collect_items(&from_dir, &from), &app, &user)?;
     if let Some(parent) = to_dir.parent() {
         fs::create_dir_all(parent).map_err(|e| e.to_string())?;
     }
-    fs::rename(&from_dir, &to_dir).map_err(|e| e.to_string())?;
-    for (kind, old, _) in &items {
-        let dir = item_path(&app, &user, &format!("{to}{}", &old[from.len()..]))?;
-        let had_preview = *kind == "document" && dir.join("preview.png").is_file();
-        write_meta(
-            &dir.join(".sync.json"),
-            &Meta { dirty: true, preview_dirty: had_preview, ..Default::default() },
-        )?;
+    fs::rename(&from_dir, &to_dir).map_err(|e| e.to_string())
+}
+
+/// Moves `from` to `to`, merging into `to` when it already exists as a plain folder. Used when another device's
+/// rename is applied here: a folder's children may already have been created under the new name.
+fn merge_move(from: &std::path::Path, to: &std::path::Path) -> Result<(), String> {
+    if !to.exists() {
+        if let Some(parent) = to.parent() {
+            fs::create_dir_all(parent).map_err(|e| e.to_string())?;
+        }
+        return fs::rename(from, to).map_err(|e| e.to_string());
+    }
+    if !from.is_dir() || !to.is_dir() || is_document(from) || is_document(to) {
+        return Err(format!("{:?} already exists", to.file_name().unwrap_or_default()));
+    }
+    for entry in fs::read_dir(from).map_err(|e| e.to_string())?.flatten() {
+        merge_move(&entry.path(), &to.join(entry.file_name()))?;
+    }
+    fs::remove_dir(from).map_err(|e| e.to_string())
+}
+
+/// Applies a rename made on another device. Unlike `move_item` it tolerates the target folder existing already.
+#[tauri::command]
+fn rename_local(app: tauri::AppHandle, user: String, kind: String, from: String, to: String) -> Result<(), String> {
+    if kind == "template" {
+        return rename_template_files(&app, &user, &from, &to);
+    }
+    if to == from || to.starts_with(&format!("{from}/")) {
+        return Err("cannot move something into itself".into());
+    }
+    let from_dir = item_path(&app, &user, &from)?;
+    let to_dir = item_path(&app, &user, &to)?;
+    if !from_dir.exists() && to_dir.exists() {
+        return Ok(()); // already moved along with a parent folder
+    }
+    if !from_dir.is_dir() {
+        return Err(format!("{from:?} not found"));
+    }
+    merge_move(&from_dir, &to_dir)
+}
+
+/// Moves a template's text, sync state and thumbnail to a new name.
+fn rename_template_files(app: &tauri::AppHandle, user: &str, from: &str, to: &str) -> Result<(), String> {
+    let (from_file, from_meta) = template_paths(app, user, from)?;
+    let (to_file, to_meta) = template_paths(app, user, to)?;
+    if !from_file.is_file() {
+        return Err(format!("{from:?} is a built-in template and cannot be renamed"));
+    }
+    if to_file.exists() || builtin(to).is_some() {
+        return Err(format!("A template named {to:?} already exists"));
+    }
+    let mut meta = read_meta(&from_meta);
+    if meta.remote_at.is_some() && meta.remote_path.is_none() {
+        meta.remote_path = Some(from.to_string());
+    }
+    let (from_png, to_png) = (template_preview_path(app, user, from)?, template_preview_path(app, user, to)?);
+    write_meta(&to_meta, &meta)?;
+    fs::rename(&from_file, &to_file).map_err(|e| e.to_string())?;
+    let _ = fs::remove_file(from_meta);
+    if from_png.is_file() {
+        let _ = fs::rename(from_png, to_png);
     }
     Ok(())
+}
+
+#[tauri::command]
+fn rename_template(app: tauri::AppHandle, user: String, from: String, to: String) -> Result<(), String> {
+    rename_template_files(&app, &user, &from, &to)
 }
 
 /// Deletes a user template (a built-in of the same name, if any, shows through again).
@@ -828,7 +962,8 @@ fn delete_template(app: tauri::AppHandle, user: String, name: String) -> Result<
         return Err(format!("{name:?} is a built-in template and cannot be deleted"));
     }
     if let Some(remote_at) = read_meta(&meta_path).remote_at {
-        add_tombstones(&app, &user, vec![Tombstone { kind: "template".into(), path: name.clone(), remote_at }])?;
+        let id = read_meta(&meta_path).id;
+        add_tombstones(&app, &user, vec![Tombstone { kind: "template".into(), path: name.clone(), id, remote_at }])?;
     }
     fs::remove_file(file).map_err(|e| e.to_string())?;
     let _ = fs::remove_file(meta_path);
@@ -1267,6 +1402,9 @@ pub fn run() {
             delete_item,
             delete_template,
             move_item,
+            rename_template,
+            rename_local,
+            set_item_id,
             remove_local,
             compile,
             export_pdf,
@@ -1335,5 +1473,66 @@ mod format_tests {
         let long = "x".repeat(100);
         let src = format!("\\begin{{document}}\n{long}\n\\end{{document}}\n");
         assert!(format_tex(src, true, 40, "2".into()).is_ok());
+    }
+}
+
+#[cfg(test)]
+mod sync_tests {
+    use super::*;
+
+    fn scratch(name: &str) -> PathBuf {
+        let dir = std::env::temp_dir().join(format!("texture-test-{name}-{}", std::process::id()));
+        let _ = fs::remove_dir_all(&dir);
+        fs::create_dir_all(&dir).unwrap();
+        dir
+    }
+
+    #[test]
+    fn merge_move_renames_when_the_target_is_free() {
+        let root = scratch("free");
+        fs::create_dir_all(root.join("A/sub")).unwrap();
+        fs::write(root.join("A/.sync.json"), "{}").unwrap();
+        merge_move(&root.join("A"), &root.join("B")).unwrap();
+        assert!(root.join("B/sub").is_dir() && root.join("B/.sync.json").is_file() && !root.join("A").exists());
+        let _ = fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn merge_move_folds_a_folder_into_an_existing_plain_folder() {
+        // A device applying another device's folder rename may already have created the new folder implicitly
+        // (because a document inside it was moved first).
+        let root = scratch("merge");
+        fs::create_dir_all(root.join("Old/Labs")).unwrap();
+        fs::write(root.join("Old/.sync.json"), "{\"id\":\"f\"}").unwrap();
+        fs::create_dir_all(root.join("New/Labs/Lab 1")).unwrap();
+        fs::write(root.join("New/Labs/Lab 1/main.tex"), "x").unwrap();
+        merge_move(&root.join("Old"), &root.join("New")).unwrap();
+        assert!(!root.join("Old").exists());
+        assert!(root.join("New/.sync.json").is_file());
+        assert!(root.join("New/Labs/Lab 1/main.tex").is_file());
+        let _ = fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn merge_move_refuses_to_overwrite_a_document() {
+        let root = scratch("doc");
+        fs::create_dir_all(root.join("A")).unwrap();
+        fs::create_dir_all(root.join("B")).unwrap();
+        fs::write(root.join("B/main.tex"), "x").unwrap();
+        assert!(merge_move(&root.join("A"), &root.join("B")).is_err());
+        assert!(root.join("A").exists());
+        let _ = fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn tombstones_match_by_id_when_both_have_one() {
+        let t = |path: &str, id: Option<&str>| Tombstone { kind: "document".into(), path: path.into(), id: id.map(Into::into), remote_at: "v".into() };
+        // same path, different documents (the name was reused)
+        assert!(!same_item(&t("HW", Some("~a")), "document", "HW", Some("~b")));
+        // renamed since: still the same document
+        assert!(same_item(&t("Old", Some("~a")), "document", "New", Some("~a")));
+        // legacy tombstone without an id falls back to the path
+        assert!(same_item(&t("HW", None), "document", "HW", Some("~a")));
+        assert!(!same_item(&t("HW", None), "template", "HW", None));
     }
 }

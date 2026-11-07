@@ -8,7 +8,8 @@
     "dev": "vite",
     "build": "tsc && vite build",
     "preview": "vite preview",
-    "tauri": "tauri"
+    "tauri": "tauri",
+    "test": "vitest run"
   },
   "dependencies": {
     "@codemirror/autocomplete": "^6.20.4",
@@ -17,12 +18,12 @@
     "@codemirror/legacy-modes": "^6.5.5",
     "@codemirror/state": "^6.7.6",
     "@codemirror/view": "^6.43.15",
-    "@texture/api": "*",
     "@lezer/highlight": "^1.2.5",
     "@replit/codemirror-vim": "^6.4.0",
     "@tauri-apps/api": "^2",
     "@tauri-apps/plugin-dialog": "^2.8.4",
     "@tauri-apps/plugin-opener": "^2",
+    "@texture/api": "*",
     "codemirror": "^6.0.2",
     "pdfjs-dist": "^6.4.299",
     "smol-toml": "^1.9.1"
@@ -30,6 +31,7 @@
   "devDependencies": {
     "@tauri-apps/cli": "^2",
     "typescript": "~6.0.3",
-    "vite": "^8.0.16"
+    "vite": "^8.0.16",
+    "vitest": "^5.1.0"
   }
 }
