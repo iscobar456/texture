@@ -1,6 +1,7 @@
 {
   "name": "texture",
   "private": true,
+  "license": "MIT",
   "workspaces": [
     "apps/desktop",
     "packages/*"
