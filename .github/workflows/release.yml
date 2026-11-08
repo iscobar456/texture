@@ -43,6 +43,8 @@ jobs:
       - uses: tauri-apps/tauri-action@v0
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          # Ad-hoc sign ("-"): no Developer ID, but Apple silicon refuses to run completely unsigned code ("damaged").
+          APPLE_SIGNING_IDENTITY: "-"
           # Baked into the frontend at build time (the anon key is public by design).
           VITE_SUPABASE_URL: ${{ secrets.VITE_SUPABASE_URL }}
           VITE_SUPABASE_ANON_KEY: ${{ secrets.VITE_SUPABASE_ANON_KEY }}

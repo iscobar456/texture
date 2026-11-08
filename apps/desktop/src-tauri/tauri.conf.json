@@ -28,6 +28,7 @@
     "active": true,
     "externalBin": ["binaries/tectonic"],
     "targets": "all",
+    "macOS": { "signingIdentity": "-" },
     "icon": [
       "icons/32x32.png",
       "icons/128x128.png",

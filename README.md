@@ -37,6 +37,15 @@ Compiling uses a bundled [Tectonic](https://tectonic-typesetting.github.io/) sid
 
 To use photo transcription, add your own Anthropic API key in Settings → Photo OCR. The key stays on your device.
 
+#### Opening the macOS app
+
+The macOS build is ad-hoc signed, not notarized by Apple, so Gatekeeper warns the first time you open it. This is expected. Drag Texture to Applications, then:
+
+- **macOS 15 (Sequoia) or later:** double-click Texture and dismiss the warning. Open System Settings → Privacy & Security, scroll to the Security section, click **Open Anyway** next to "Texture was blocked", and enter your password. You only need to do this once.
+- **macOS 14 or earlier:** right-click (or Control-click) Texture, choose **Open**, then click **Open** in the dialog.
+
+If macOS says the app is "damaged and can't be opened", run `xattr -cr /Applications/Texture.app` in Terminal and open it again.
+
 ### Mobile
 
 ```sh
