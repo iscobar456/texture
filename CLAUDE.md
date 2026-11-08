@@ -18,6 +18,7 @@ Texture: a monorepo for writing homework as LaTeX on desktop and pulling in phot
 - Install: `npm install` at the repo root (npm workspaces: `apps/desktop`, `packages/*`).
 - Desktop dev: `npm run tauri dev` from `apps/desktop`. Frontend only: `npm run dev`.
 - Desktop build: `npm run tauri build` from `apps/desktop`.
+- Releases are split by machine, all attaching to one GitHub release per tag: `scripts/release.sh` (Linux bundles + Android APK; creates the draft release), `scripts/release-macos.sh` (run on a Mac: Apple silicon + Intel DMGs, the Intel one cross-compiled; `--ios` adds an unsigned sideload-only `.ipa`), and the manual Release workflow (Windows only; macOS runners are too costly). macOS builds are ad-hoc signed (`bundle.macOS.signingIdentity: "-"` in `tauri.conf.json`), not notarized, because there is no Apple Developer account; unsigned arm64 apps show "damaged", ad-hoc ones show the normal Gatekeeper warning, and the README documents the Open Anyway steps. With a Developer ID, the `APPLE_SIGNING_IDENTITY`/`APPLE_ID`/`APPLE_PASSWORD`/`APPLE_TEAM_ID` env vars override the config and notarize.
 - Mobile (Flutter is at `~/flutter/bin`): `apps/mobile/run.sh [flutter run args]`; `flutter analyze` to lint.
 
 ## Architecture notes
