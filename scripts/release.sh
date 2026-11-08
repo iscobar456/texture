@@ -5,7 +5,7 @@
 #   scripts/release.sh --dry-run    build and list the files, but skip the git checks and do not create a release
 # Needs: gh (logged in), apps/desktop/.env, apps/mobile/.env, and apps/mobile/android/key.properties (the release
 # keystore; without it the APK would be debug-signed and phones could not update over it).
-# macOS and Windows are not built here; use the manual Release workflow for those.
+# macOS is built by scripts/release-macos.sh (on a Mac); Windows by the manual Release workflow.
 set -euo pipefail
 cd "$(dirname "$0")/.."
 root=$PWD

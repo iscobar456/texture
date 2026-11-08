@@ -1,8 +1,8 @@
 name: Release
 
-# Manual only (macOS and Windows runners are billed at 10x and 2x). Builds just the macOS and Windows installers and
-# attaches them to the release (draft or published) for the given tag. Linux and Android are built locally with
-# scripts/release.sh, which creates the draft release; run this afterwards with the same tag.
+# Manual only (Windows runners are billed at 2x). Builds just the Windows installer and attaches it to the release
+# (draft or published) for the given tag. Linux and Android are built locally with scripts/release.sh, which creates
+# the draft release; macOS is built on a Mac with scripts/release-macos.sh. Run this afterwards with the same tag.
 on:
   workflow_dispatch:
     inputs:
@@ -16,12 +16,6 @@ jobs:
       fail-fast: false
       matrix:
         include:
-          - os: macos-latest # Apple silicon
-            args: "--target aarch64-apple-darwin"
-            rust-targets: aarch64-apple-darwin
-          - os: macos-latest # Intel target, cross-compiled on Apple silicon
-            args: "--target x86_64-apple-darwin"
-            rust-targets: x86_64-apple-darwin
           - os: windows-latest
             args: ""
     runs-on: ${{ matrix.os }}
@@ -43,8 +37,6 @@ jobs:
       - uses: tauri-apps/tauri-action@v0
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-          # Ad-hoc sign ("-"): no Developer ID, but Apple silicon refuses to run completely unsigned code ("damaged").
-          APPLE_SIGNING_IDENTITY: "-"
           # Baked into the frontend at build time (the anon key is public by design).
           VITE_SUPABASE_URL: ${{ secrets.VITE_SUPABASE_URL }}
           VITE_SUPABASE_ANON_KEY: ${{ secrets.VITE_SUPABASE_ANON_KEY }}
