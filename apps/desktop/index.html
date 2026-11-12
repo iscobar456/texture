@@ -28,6 +28,7 @@
           <div id="menu-list" role="menu" hidden>
             <button role="menuitem" id="compile"><span>Compile</span><kbd data-key="Mod-Enter"></kbd></button>
             <button role="menuitem" id="format-doc"><span>Format document</span><kbd data-key="Mod-Shift-f"></kbd></button>
+            <button role="menuitem" id="menu-new-doc"><span>New document…</span><kbd data-key="Mod-n"></kbd></button>
             <button role="menuitem" id="export-pdf"><span>Export PDF…</span></button>
             <hr role="separator" />
             <button role="menuitem" id="open-snippets"><span>Snippets…</span></button>
@@ -131,7 +132,10 @@
 
     <dialog id="settings-dialog">
       <form method="dialog" id="settings-form" class="settings">
-        <h3>Settings</h3>
+        <div class="settings-head">
+          <h3>Settings</h3>
+          <button type="button" class="cancel icon-btn" aria-label="Close" title="Close (Esc)"><svg viewBox="0 0 16 16" width="14" height="14" aria-hidden="true"><path d="M3.5 3.5l9 9M12.5 3.5l-9 9" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round"/></svg></button>
+        </div>
         <fieldset>
           <legend>Appearance</legend>
           <label>Theme
@@ -194,6 +198,13 @@
               <button type="button" id="set-ocr-save" class="primary">Save key</button>
             </div>
           </div>
+          <div class="ocr-prompt">
+            <div class="ocr-key-head">
+              <label>Transcription instructions</label>
+              <span id="set-ocr-prompt-state" class="muted"></span>
+              <button type="button" id="set-ocr-prompt-edit">Edit…</button>
+            </div>
+          </div>
           <span class="muted">
             Uses your own Anthropic API key, so usage is billed to your Anthropic account. The key stays on this device, is never synced, and is sent only to Anthropic.
           </span>
@@ -207,6 +218,25 @@
           <button type="button" class="cancel primary">Done</button>
         </div>
       </form>
+    </dialog>
+
+    <dialog id="ocr-prompt-dialog">
+      <div class="dlg-head">
+        <strong>Transcription instructions</strong>
+        <span class="spacer"></span>
+        <button type="button" class="cancel icon-btn" aria-label="Close" title="Close (Esc)"><svg viewBox="0 0 16 16" width="14" height="14" aria-hidden="true"><path d="M3.5 3.5l9 9M12.5 3.5l-9 9" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round"/></svg></button>
+      </div>
+      <div class="ocr-prompt-body">
+        <p class="muted">Sent to the model with every photo you transcribe. Applies to new transcriptions only; saved ones are not redone.</p>
+        <textarea id="ocr-prompt-text" spellcheck="false" maxlength="4000"></textarea>
+        <div class="row">
+          <button type="button" id="ocr-prompt-reset">Restore default</button>
+          <span class="spacer"></span>
+          <span id="ocr-prompt-count" class="muted"></span>
+          <button type="button" class="cancel">Cancel</button>
+          <button type="button" id="ocr-prompt-save" class="primary">Save</button>
+        </div>
+      </div>
     </dialog>
 
     <dialog id="switcher">
@@ -301,15 +331,6 @@
         <pre id="latex-error" hidden></pre>
         <div class="row"><button type="button" id="latex-retry" hidden>Try again</button><button type="button" class="cancel">Hide</button></div>
       </div>
-    </dialog>
-
-    <dialog id="closing-dialog" data-persistent>
-      <form method="dialog">
-        <h3>Closing Texture</h3>
-        <p>Saving and syncing your changes first…</p>
-        <div class="row"><button type="button" id="quit-now">Quit now</button></div>
-        <span class="muted">Anything that does not finish uploading stays safe on this device and syncs next time.</span>
-      </form>
     </dialog>
 
     <dialog id="picker">

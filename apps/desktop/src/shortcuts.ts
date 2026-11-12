@@ -21,6 +21,7 @@ function sections(vimOn: boolean): Section[] {
         ["Mod-Enter", "Compile and refresh the preview"],
         ["Mod-p", "Search all documents and open one (or create it)"],
         ["Mod-Shift-f", "Format the document with tex-fmt (indent, tidy whitespace, optionally break long lines; see Settings)"],
+        ["Mod-n", "Create a new document (in the current document's folder)"],
         ["Mod-,", "Open Settings"],
         ["ArrowDown / ArrowUp", "Move through an open menu or the document search results"],
         ["Escape", "Close the menu or a dialog"],

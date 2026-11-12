@@ -1057,8 +1057,50 @@ fn remove_local(app: tauri::AppHandle, user: String, kind: String, path: String)
 /// Models offered in Settings. Anything else is rejected, so the key can't be pointed at an arbitrary model.
 const OCR_MODELS: [&str; 3] = ["claude-haiku-5-5", "claude-sonnet-5-5", "claude-opus-5-5"];
 
-const OCR_PROMPT: &str = "Transcribe this handwritten work into LaTeX. Output only the LaTeX body (no preamble, no code fences), \
-using align* for multi-line math. Mark illegible parts with a %UNSURE comment.";
+const OCR_PROMPT: &str = "\
+You are transcribing a photo of handwritten work (a student's homework on paper or a whiteboard) into LaTeX. \
+The output is pasted into the body of an existing document that already has amsmath and amssymb loaded.
+
+Output rules:
+- Output only the LaTeX body: no preamble, no \\documentclass, no \\begin{document}, no title or \\section unless \
+it is written in the photo, and never wrap the answer in Markdown code fences or add any commentary.
+- Text is text. Sentences, problem statements and explanations are ordinary paragraphs, not math. Never put \
+prose in a math environment or inside \\text{}.
+- Put math in $...$ inline. Use a display environment only for equations that are written on their own line: \
+\\[ ... \\] for a single one, and align* only for consecutive equations that are visibly aligned or chained \
+(for example successive steps of a derivation).
+- Reproduce lists and structure: numbered or lettered parts such as (a), (b) become an enumerate with \\item \
+(use \\item[(a)] if the labels matter), and bullets become itemize. Separate paragraphs with a blank line.
+- Exercise or problem identifiers, such as \"6.12)\", \"Exercise 6.12\", \"Problem 3\" or \"Q4\", go in bold with \\textbf{}, \
+for example \\textbf{6.12)} or \\textbf{Exercise 6.12}, starting the paragraph that holds that problem.
+- Transcribe faithfully. Keep the writer's wording and notation. Do not solve, correct, complete or reorder anything.
+- Leave out crossed-out work. For a diagram or graph, write a one-line comment such as % [diagram: triangle ABC] \
+rather than inventing TikZ.
+- Mark anything illegible or uncertain with a % UNSURE comment on the line above it, and give your best guess.";
+
+/// Longest custom prompt accepted from Settings (characters).
+const OCR_PROMPT_MAX: usize = 4000;
+
+#[tauri::command]
+fn ocr_default_prompt() -> &'static str {
+    OCR_PROMPT
+}
+
+/// Models sometimes wrap the answer in ```latex ... ``` despite being told not to; strip one such wrapper.
+fn strip_code_fence(text: &str) -> String {
+    let t = text.trim();
+    if let Some(rest) = t.strip_prefix("```") {
+        if let Some(nl) = rest.find('\n') {
+            let (lang, body) = rest.split_at(nl);
+            if lang.trim().chars().all(|c| c.is_ascii_alphanumeric()) {
+                let body = body.trim_start_matches('\n');
+                let body = body.trim_end();
+                return body.strip_suffix("```").unwrap_or(body).trim().to_string();
+            }
+        }
+    }
+    t.to_string()
+}
 
 /// Per-account, device-local. Never synced and never sent anywhere except api.anthropic.com.
 fn key_file(app: &tauri::AppHandle, user: &str) -> Result<PathBuf, String> {
@@ -1165,6 +1207,18 @@ async fn ocr_image(app: tauri::AppHandle, request: Request<'_>) -> Result<OcrRes
         return Err(format!("unknown model {model:?}"));
     }
     let key = read_key(&app, &user)?;
+    // Optional custom prompt from Settings, base64-encoded because header values can't hold newlines.
+    let prompt = match request.headers().get("x-prompt").and_then(|v| v.to_str().ok()) {
+        Some(b64) if !b64.is_empty() => {
+            let raw = base64::engine::general_purpose::STANDARD.decode(b64).map_err(|e| e.to_string())?;
+            let text = String::from_utf8(raw).map_err(|e| e.to_string())?;
+            if text.chars().count() > OCR_PROMPT_MAX {
+                return Err(format!("The OCR prompt is longer than {OCR_PROMPT_MAX} characters."));
+            }
+            if text.trim().is_empty() { OCR_PROMPT.to_string() } else { text }
+        }
+        _ => OCR_PROMPT.to_string(),
+    };
 
     let body = serde_json::json!({
         "model": model,
@@ -1175,7 +1229,7 @@ async fn ocr_image(app: tauri::AppHandle, request: Request<'_>) -> Result<OcrRes
             "role": "user",
             "content": [
                 { "type": "image", "source": { "type": "base64", "media_type": "image/jpeg", "data": image } },
-                { "type": "text", "text": OCR_PROMPT }
+                { "type": "text", "text": prompt }
             ]
         }]
     });
@@ -1207,7 +1261,7 @@ async fn ocr_image(app: tauri::AppHandle, request: Request<'_>) -> Result<OcrRes
         })
         .unwrap_or_default();
     Ok(OcrResult {
-        latex: latex.trim().to_string(),
+        latex: strip_code_fence(&latex),
         input_tokens: j["usage"]["input_tokens"].as_u64().unwrap_or(0),
         output_tokens: j["usage"]["output_tokens"].as_u64().unwrap_or(0),
         stop_reason,
@@ -1476,12 +1530,26 @@ pub fn run() {
             has_api_key,
             test_api_key,
             ocr_image,
+            ocr_default_prompt,
             latex::latex_setup_status,
             latex::start_latex_setup,
             latex::retry_latex_setup
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");
+}
+
+#[cfg(test)]
+mod ocr_tests {
+    use super::strip_code_fence;
+
+    #[test]
+    fn strips_fences() {
+        assert_eq!(strip_code_fence("```latex\nx = 1\n```"), "x = 1");
+        assert_eq!(strip_code_fence("```\nx\ny\n```\n"), "x\ny");
+        assert_eq!(strip_code_fence("  plain $x$ text "), "plain $x$ text");
+        assert_eq!(strip_code_fence("```latex\nx = 1"), "x = 1");
+    }
 }
 
 #[cfg(test)]

@@ -2,7 +2,7 @@ import { PHOTO_MIME } from "./placement";
 import { invoke } from "@tauri-apps/api/core";
 import type { createApi, Photo } from "@texture/api";
 import { toast } from "./toast";
-import { OCR_MODELS, type Settings } from "./settings";
+import { OCR_MODELS, ocrHeaders, type Settings } from "./settings";
 
 type Api = ReturnType<typeof createApi>;
 
@@ -1071,7 +1071,7 @@ export function initInbox(deps: InboxDeps) {
     try {
       const jpeg = await bytesOf(await renderRotated(await original(it.p), 0, 1568, 0.85));
       const r = await invoke<{ latex: string; input_tokens: number; output_tokens: number; stop_reason: string }>(
-        "ocr_image", jpeg, { headers: { "x-user": deps.user(), "x-model": deps.settings().ocrModel } },
+        "ocr_image", jpeg, { headers: ocrHeaders(deps.user(), deps.settings()) },
       );
       if (run !== batchRun || !batchDialog.open) return;
       it.text.value = r.latex;
@@ -1227,7 +1227,7 @@ export function initInbox(deps: InboxDeps) {
     try {
       const jpeg = await bytesOf(await renderRotated(await original(p), ocrDeg, 1568, 0.85));
       const r = await invoke<{ latex: string; input_tokens: number; output_tokens: number; stop_reason: string }>(
-        "ocr_image", jpeg, { headers: { "x-user": deps.user(), "x-model": deps.settings().ocrModel } },
+        "ocr_image", jpeg, { headers: ocrHeaders(deps.user(), deps.settings()) },
       );
       if (run !== ocrRun || !ocrDialog.open) return; // closed or restarted meanwhile
       ocrText.value = r.latex;

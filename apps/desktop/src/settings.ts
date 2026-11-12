@@ -22,6 +22,15 @@ export const OCR_MODELS = [
 ] as const;
 export type OcrModel = (typeof OCR_MODELS)[number][0];
 
+export const OCR_PROMPT_MAX = 4000;
+
+/** Headers for the `ocr_image` command. The prompt travels base64-encoded: header values can't hold newlines. */
+export function ocrHeaders(user: string, s: Settings): Record<string, string> {
+  const h: Record<string, string> = { "x-user": user, "x-model": s.ocrModel };
+  if (s.ocrPrompt.trim()) h["x-prompt"] = btoa(String.fromCharCode(...new TextEncoder().encode(s.ocrPrompt)));
+  return h;
+}
+
 export type Settings = {
   theme: "system" | "light" | "dark";
   editorTheme: EditorTheme;
@@ -34,6 +43,8 @@ export type Settings = {
   /** Pre-selected template in the New document dialog. */
   defaultTemplate: string;
   ocrModel: OcrModel;
+  /** Custom OCR instructions; empty means the built-in default (kept in Rust). */
+  ocrPrompt: string;
   /** Format document (tex-fmt): break long lines, where, and how deep to indent. */
   formatWrap: boolean;
   formatWrapLen: number;
@@ -50,6 +61,7 @@ export const DEFAULTS: Settings = {
   autoCompile: false,
   defaultTemplate: "Blank",
   ocrModel: "claude-sonnet-5-5",
+  ocrPrompt: "",
   formatWrap: false,
   formatWrapLen: 80,
   formatIndent: "2",
@@ -78,6 +90,7 @@ export function loadSettings(): Settings {
     lineNumbers: typeof raw.lineNumbers === "boolean" ? raw.lineNumbers : DEFAULTS.lineNumbers,
     autoCompile: typeof raw.autoCompile === "boolean" ? raw.autoCompile : DEFAULTS.autoCompile,
     ocrModel: pick(raw.ocrModel, OCR_MODELS.map(([v]) => v), DEFAULTS.ocrModel),
+    ocrPrompt: typeof raw.ocrPrompt === "string" ? raw.ocrPrompt.slice(0, OCR_PROMPT_MAX) : "",
     formatWrap: typeof raw.formatWrap === "boolean" ? raw.formatWrap : DEFAULTS.formatWrap,
     formatWrapLen: Number.isFinite(Number(raw.formatWrapLen)) ? Math.min(300, Math.max(20, Math.round(Number(raw.formatWrapLen)))) : DEFAULTS.formatWrapLen,
     formatIndent: pick(raw.formatIndent, ["2", "4", "tab"] as const, DEFAULTS.formatIndent),

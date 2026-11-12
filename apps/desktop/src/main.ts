@@ -37,10 +37,10 @@ import { initLatexSetup, latexSetupRunning, startLatexSetup } from "./latex-setu
 import { initPlacement } from "./placement";
 import { toast } from "./toast";
 import { initSwitcher, splitPath } from "./switcher";
-import { collectPending, initSyncUi, type Pending } from "./sync-ui";
+import { initSyncUi, type Pending } from "./sync-ui";
 import { getCurrentWindow } from "@tauri-apps/api/window";
 import { openUrl } from "@tauri-apps/plugin-opener";
-import { DEFAULTS, EDITOR_THEMES, OCR_MODELS, loadSettings, saveSettings, applyAppearance, type Settings } from "./settings";
+import { DEFAULTS, EDITOR_THEMES, OCR_MODELS, OCR_PROMPT_MAX, loadSettings, saveSettings, applyAppearance, type Settings } from "./settings";
 
 pdfjs.GlobalWorkerOptions.workerSrc = workerUrl;
 
@@ -563,9 +563,18 @@ const field = {
   ocrModel: $<HTMLSelectElement>("set-ocr-model"),
 };
 
+// The built-in OCR instructions live in Rust. The box shows what will actually be sent; settings store ""
+// while it matches the default, so a future improvement to the default reaches people who never edited it.
+let defaultOcrPrompt = "";
+void invoke<string>("ocr_default_prompt").then((p) => {
+  defaultOcrPrompt = p;
+  showPromptState();
+});
+
 function showSettings() {
   field.theme.value = settings.theme;
   field.ocrModel.value = settings.ocrModel;
+  showPromptState();
   field.editorTheme.value = settings.editorTheme;
   field.editing.value = settings.editing;
   field.font.value = String(settings.fontSize);
@@ -675,6 +684,7 @@ function readSettings() {
     autoCompile: field.auto.checked,
     defaultTemplate: field.template.value || settings.defaultTemplate,
     ocrModel: field.ocrModel.value as Settings["ocrModel"],
+    ocrPrompt: settings.ocrPrompt,
   };
   field.fmtLen.disabled = !field.fmtWrap.checked;
   saveSettings(settings);
@@ -684,6 +694,33 @@ function readSettings() {
 field.ocrModel.replaceChildren(...OCR_MODELS.map(([value, label]) => new Option(label, value)));
 field.editorTheme.replaceChildren(...EDITOR_THEMES.map(([value, label]) => new Option(label, value)));
 Object.values(field).forEach((el) => el.addEventListener("change", readSettings));
+
+const promptText = $<HTMLTextAreaElement>("ocr-prompt-text");
+function showPromptState() {
+  $("set-ocr-prompt-state").textContent = settings.ocrPrompt ? "Customized" : "Default";
+}
+function showPromptCount() {
+  $("ocr-prompt-count").textContent = `${promptText.value.length} / ${OCR_PROMPT_MAX}`;
+}
+$("set-ocr-prompt-edit").addEventListener("click", () => {
+  promptText.value = settings.ocrPrompt || defaultOcrPrompt;
+  showPromptCount();
+  $<HTMLDialogElement>("ocr-prompt-dialog").showModal();
+  promptText.focus();
+});
+promptText.addEventListener("input", showPromptCount);
+$("ocr-prompt-reset").addEventListener("click", () => {
+  promptText.value = defaultOcrPrompt;
+  showPromptCount();
+});
+$("ocr-prompt-save").addEventListener("click", () => {
+  const v = promptText.value.trim();
+  // Stored as "" while it matches the default, so a better default later reaches people who never edited it.
+  settings = { ...settings, ocrPrompt: !v || v === defaultOcrPrompt.trim() ? "" : promptText.value };
+  saveSettings(settings);
+  showPromptState();
+  $<HTMLDialogElement>("ocr-prompt-dialog").close();
+});
 
 $("settings-reset").addEventListener("click", () => {
   settings = { ...DEFAULTS };
@@ -717,6 +754,14 @@ const switcher = initSwitcher({
   },
 });
 
+/** Ctrl/Cmd+N: opens the picker on Documents (in the current document's folder) and its New document dialog. */
+async function newDocumentShortcut() {
+  await openPicker("documents");
+  $("new-document").click();
+}
+
+$("menu-new-doc").addEventListener("click", () => void newDocumentShortcut());
+
 // App-level shortcuts. Captured early so the editor (and Vim) never see them; ignored while a dialog is open.
 document.addEventListener(
   "keydown",
@@ -726,6 +771,10 @@ document.addEventListener(
       e.preventDefault();
       e.stopPropagation();
       void switcher.open();
+    } else if (e.key.toLowerCase() === "n" && !document.querySelector("dialog[open]")) {
+      e.preventDefault();
+      e.stopPropagation();
+      void newDocumentShortcut();
     } else if (e.key === "," && !document.querySelector("dialog[open]")) {
       e.preventDefault();
       e.stopPropagation();
@@ -1474,33 +1523,19 @@ async function runPass() {
   }
 }
 
-// Closing the window: save, then give a sync a few seconds. Local-first, so whatever does not finish
-// is safe on disk and goes up next time; the "Quit now" button means this can never trap you.
+// Closing the window: only flush the pending editor save; it never waits for a sync. Local-first, so
+// unsynced changes stay safe on disk and go up the next time the app runs.
 let closing = false;
 void getCurrentWindow().onCloseRequested(async (event) => {
-  if (!user || closing) return; // not signed in (or already closing): close normally
+  if (!user || closing) return;
   closing = true;
   event.preventDefault();
-  const win = getCurrentWindow();
-  const dialog = $<HTMLDialogElement>("closing-dialog");
-  dialog.showModal();
-  $("quit-now").onclick = () => void win.destroy();
   try {
     await flushSave();
-    await Promise.race([
-      (async () => {
-        // Up to two passes: the second catches anything saved while the first was running.
-        for (let i = 0; i < 2; i++) {
-          await doSync();
-          if (!(await collectPending(user)).items.length) break;
-        }
-      })(),
-      new Promise((resolve) => setTimeout(resolve, 8000)),
-    ]);
   } catch (e) {
-    console.warn("sync on exit failed", e);
+    console.warn("save on exit failed", e);
   }
-  await win.destroy();
+  await getCurrentWindow().destroy();
 });
 
 window.addEventListener("online", () => { void doSync(); if (user) void inbox.refresh(); });
