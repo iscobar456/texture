@@ -65,6 +65,22 @@ export function keyFromEvent(e: KeyboardEvent): string | null {
 
 export const showKey = (key: string) => key.replace("Mod", navigator.platform.includes("Mac") ? "⌘" : "Ctrl");
 
+/**
+ * Finds the first \end after `rest` that has no matching \begin in between, i.e. the \end that
+ * belongs to the \begin just before `rest`. `base` is the document offset where `rest` starts.
+ */
+function findOwnEnd(rest: string, base: number): { from: number; to: number; empty: boolean } | null {
+  let depth = 0;
+  for (const m of rest.matchAll(/\\(begin|end)\{([^}]*)\}/g)) {
+    if (m[1] === "begin") depth++;
+    else if (depth-- === 0) {
+      const nameFrom = base + m.index! + m[0].indexOf("{") + 1;
+      return { from: nameFrom, to: nameFrom + m[2].length, empty: m[2] === "" };
+    }
+  }
+  return null;
+}
+
 /** Replaces the typed name and the auto-closed "}" together, then inserts an environment skeleton. */
 function beginEnvironment(name: string): Completion {
   const tpl = `${name}}\n\t#{}\n\\end{${name}}`;
@@ -75,6 +91,15 @@ function beginEnvironment(name: string): Completion {
     apply: (view, completion, from, to) => {
       // closeBrackets leaves a "}" after the cursor; the template supplies its own.
       const end = view.state.sliceDoc(to, to + 1) === "}" ? to + 1 : to;
+      // If this \begin already has its \end (e.g. it came from the \begin snippet), only fill in the name.
+      const orphan = findOwnEnd(view.state.sliceDoc(end), end);
+      if (orphan) {
+        const changes: { from: number; to: number; insert: string }[] = [{ from, to: end, insert: `${name}}` }];
+        if (orphan.empty) changes.push({ from: orphan.from, to: orphan.to, insert: name });
+        const pos = from + name.length + 1;
+        view.dispatch({ changes, selection: { anchor: pos }, userEvent: "input.complete" });
+        return;
+      }
       snippet(tpl)(view, completion, from, end);
     },
   };
