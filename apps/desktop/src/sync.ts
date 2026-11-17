@@ -28,8 +28,8 @@ export type SyncResult = {
   renamed: { kind: DocKind; from: string; to: string }[];
   /** Documents that need their images synced (pulled, or newly pushed such as after a move). */
   touched: Set<string>;
-  /** The snippets file was replaced by a newer copy from another device. */
-  configPulled: boolean;
+  /** Config files (by name: "snippets", "settings") replaced by a newer copy from another device. */
+  configsPulled: string[];
   /** Items that failed individually (e.g. a malformed name on the server). Everything else still synced. */
   errors: string[];
 };
@@ -146,7 +146,7 @@ async function syncKind(api: Api, user: string, kind: DocKind, out: SyncResult):
       id: dirty ? null : doc.id, remotePath: dirty ? null : doc.path,
     });
     if (kind === "document" && !dirty) out.pulled.push(asPath);
-    if (kind === "config") out.configPulled = true;
+    if (kind === "config") out.configsPulled.push(asPath);
   };
 
   /** Writes the local copy (content and path) to the server. `baseAt` null means a new row. */
@@ -307,7 +307,7 @@ let running = false;
 export async function runSync(api: Api, user: string, current: string | null): Promise<SyncResult | null> {
   if (running) return null;
   running = true;
-  const out: SyncResult = { pulled: [], conflicts: [], removed: [], renamed: [], touched: new Set(), errors: [], configPulled: false };
+  const out: SyncResult = { pulled: [], conflicts: [], removed: [], renamed: [], touched: new Set(), errors: [], configsPulled: [] };
   try {
     await syncDeletions(api, user, out);
     await (await syncKind(api, user, "template", out))();

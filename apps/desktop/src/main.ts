@@ -40,7 +40,10 @@ import { initSwitcher, splitPath } from "./switcher";
 import { initSyncUi, type Pending } from "./sync-ui";
 import { getCurrentWindow } from "@tauri-apps/api/window";
 import { openUrl } from "@tauri-apps/plugin-opener";
-import { DEFAULTS, EDITOR_THEMES, OCR_MODELS, OCR_PROMPT_MAX, loadSettings, saveSettings, applyAppearance, type Settings } from "./settings";
+import {
+  DEFAULTS, EDITOR_THEMES, OCR_MODELS, OCR_PROMPT_MAX, SETTINGS_CONFIG, applyAppearance, applySyncedSettings, loadSettings,
+  saveSettings, syncedSettingsToml, type Settings,
+} from "./settings";
 
 pdfjs.GlobalWorkerOptions.workerSrc = workerUrl;
 
@@ -668,10 +671,45 @@ ocrRemove.addEventListener("click", () =>
   }),
 );
 
+/** Replaces the settings. The ones that follow the account (settings.ts) also go to the synced file when they change. */
+function setSettings(next: Settings) {
+  const changed = next.ocrPrompt !== settings.ocrPrompt || next.defaultTemplate !== settings.defaultTemplate;
+  settings = next;
+  saveSettings(settings);
+  if (changed && user) void pushSyncedSettings();
+}
+
+async function pushSyncedSettings() {
+  try {
+    await invoke("save_config", { user, name: SETTINGS_CONFIG, source: syncedSettingsToml(settings) });
+    syncSoon();
+  } catch (e) {
+    console.warn("could not save the synced settings", e);
+    status("Couldn't save your OCR instructions and default template for syncing");
+  }
+}
+
+/**
+ * Adopts the account's synced settings (at sign-in, and when a sync pulls a newer copy). An account that has none
+ * yet is seeded from this device, but only if something here differs from the defaults.
+ */
+async function loadSyncedSettings() {
+  const text = await invoke<string | null>("load_config", { user, name: SETTINGS_CONFIG });
+  if (text === null) {
+    if (settings.ocrPrompt !== DEFAULTS.ocrPrompt || settings.defaultTemplate !== DEFAULTS.defaultTemplate) await pushSyncedSettings();
+    return;
+  }
+  settings = applySyncedSettings(settings, text);
+  saveSettings(settings);
+  showPromptState();
+  // An open Settings dialog must not write its stale choice back on the next change.
+  if ([...field.template.options].some((o) => o.value === settings.defaultTemplate)) field.template.value = settings.defaultTemplate;
+}
+
 // Changes apply immediately; there is no OK button.
 function readSettings() {
   const size = Number(field.font.value);
-  settings = {
+  setSettings({
     theme: field.theme.value as Settings["theme"],
     editorTheme: field.editorTheme.value as Settings["editorTheme"],
     editing: field.editing.value as Settings["editing"],
@@ -685,9 +723,8 @@ function readSettings() {
     defaultTemplate: field.template.value || settings.defaultTemplate,
     ocrModel: field.ocrModel.value as Settings["ocrModel"],
     ocrPrompt: settings.ocrPrompt,
-  };
+  });
   field.fmtLen.disabled = !field.fmtWrap.checked;
-  saveSettings(settings);
   applySettings();
 }
 
@@ -716,15 +753,13 @@ $("ocr-prompt-reset").addEventListener("click", () => {
 $("ocr-prompt-save").addEventListener("click", () => {
   const v = promptText.value.trim();
   // Stored as "" while it matches the default, so a better default later reaches people who never edited it.
-  settings = { ...settings, ocrPrompt: !v || v === defaultOcrPrompt.trim() ? "" : promptText.value };
-  saveSettings(settings);
+  setSettings({ ...settings, ocrPrompt: !v || v === defaultOcrPrompt.trim() ? "" : promptText.value });
   showPromptState();
   $<HTMLDialogElement>("ocr-prompt-dialog").close();
 });
 
 $("settings-reset").addEventListener("click", () => {
-  settings = { ...DEFAULTS };
-  saveSettings(settings);
+  setSettings({ ...DEFAULTS });
   applySettings();
   showSettings();
 });
@@ -1503,7 +1538,8 @@ async function runPass() {
       } else if (templateName === null && !snippetsOpen) followMove(r.from, r.to);
     }
     // Reload the open document if the server copy replaced it. flushSave() above means no edits were lost.
-    if (res.configPulled) {
+    if (res.configsPulled.includes(SETTINGS_CONFIG)) await loadSyncedSettings();
+    if (res.configsPulled.includes(SNIPPETS_CONFIG)) {
       const t = await invoke<string | null>("load_config", { user, name: SNIPPETS_CONFIG });
       if (t !== null) {
         applySnippetsText(t);
@@ -1556,6 +1592,7 @@ async function start(userId: string) {
   // Pull first on a fresh device so we don't invent a document that the server already has.
   await doSync();
   await initSnippets();
+  await loadSyncedSettings().catch((e) => console.warn("could not load the synced settings", e));
 
   const docs = await invoke<DocInfo[]>("list_documents", { user });
   let last: string | null = null;

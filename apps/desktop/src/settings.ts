@@ -1,3 +1,5 @@
+import { parse, stringify } from "smol-toml";
+
 /** Editor color schemes. "soft" follows the app theme; the rest are fixed palettes (see styles.css). */
 export const EDITOR_THEMES = [
   ["soft", "Soft (follows app theme)"],
@@ -67,8 +69,35 @@ export const DEFAULTS: Settings = {
   formatIndent: "2",
 };
 
-// Per-device on purpose: font size and theme depend on the screen in front of you.
+// Per-device on purpose: font size and theme depend on the screen in front of you. Two settings are work the
+// user would not want to redo on a new device, so they also follow the account (see SETTINGS_CONFIG below).
 const KEY = "texture:settings";
+
+/**
+ * The settings that follow the account: the custom OCR instructions and the default template. They are kept in a
+ * small TOML file that syncs like the snippets file (`<user_dir>/.config/settings.toml`, sync kind `config`);
+ * `localStorage` still holds a copy so they are there before sign-in and offline.
+ */
+export const SETTINGS_CONFIG = "settings";
+
+export function syncedSettingsToml(s: Settings): string {
+  return stringify({ default_template: s.defaultTemplate, ocr_prompt: s.ocrPrompt });
+}
+
+/** `s` with the synced values from the file's text. Anything missing or malformed keeps the current value. */
+export function applySyncedSettings(s: Settings, text: string): Settings {
+  let raw: Record<string, unknown>;
+  try {
+    raw = parse(text);
+  } catch {
+    return s;
+  }
+  return {
+    ...s,
+    defaultTemplate: typeof raw.default_template === "string" && raw.default_template ? raw.default_template : s.defaultTemplate,
+    ocrPrompt: typeof raw.ocr_prompt === "string" ? raw.ocr_prompt.slice(0, OCR_PROMPT_MAX) : s.ocrPrompt,
+  };
+}
 
 const pick = <T extends string>(v: unknown, allowed: readonly T[], fallback: T): T =>
   allowed.includes(v as T) ? (v as T) : fallback;

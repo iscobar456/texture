@@ -279,10 +279,10 @@ fn walk(dir: &std::path::Path, prefix: &str, docs: &mut Vec<DocInfo>, folders: &
     }
 }
 
-// ---- synced config files (currently just the snippets file) ----
+// ---- synced config files (the snippets file, and the settings that follow the account) ----
 
 /// Only these can be read or written, so a name from the frontend never becomes an arbitrary path.
-const CONFIG_NAMES: [&str; 1] = ["snippets"];
+const CONFIG_NAMES: [&str; 2] = ["snippets", "settings"];
 
 /// `<user_dir>/.config/<name>.toml` plus its sync state beside it.
 fn config_paths(app: &tauri::AppHandle, user: &str, name: &str) -> Result<(PathBuf, PathBuf), String> {

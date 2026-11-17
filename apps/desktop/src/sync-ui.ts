@@ -42,9 +42,12 @@ export async function collectPending(user: string): Promise<Pending> {
     }
   }
   for (const c of configs) {
-    if (c.dirty) {
+    if (!c.dirty) continue;
+    if (c.path === "snippets") {
       p.snippetsDirty = true;
       p.items.push({ group: "Snippets file", label: "your snippets" });
+    } else {
+      p.items.push({ group: "Settings", label: "OCR instructions and default template" });
     }
   }
   for (const t of deletions) p.items.push({ group: "Deletions", label: `${t.kind}: ${t.path}` });

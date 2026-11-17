@@ -27,11 +27,14 @@ jobs:
       - name: Typecheck frontend
         run: npx tsc --noEmit
         working-directory: apps/desktop
+      - name: Frontend tests (sync)
+        run: npm test
+        working-directory: apps/desktop
       - name: Fetch tectonic sidecar (tauri's build script requires it)
         run: node scripts/fetch-tectonic.mjs
         working-directory: apps/desktop
-      - name: cargo check
-        run: cargo check --locked
+      - name: cargo test
+        run: cargo test --locked
         working-directory: apps/desktop/src-tauri
 
   mobile:
