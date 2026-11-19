@@ -1,0 +1,19 @@
+{
+  "app": {
+    "windows": [
+      {
+        "title": "Texture",
+        "width": 1400,
+        "height": 850,
+        "dragDropEnabled": false,
+        "decorations": true,
+        "titleBarStyle": "Overlay",
+        "hiddenTitle": true,
+        "trafficLightPosition": {
+          "x": 14,
+          "y": 20
+        }
+      }
+    ]
+  }
+}

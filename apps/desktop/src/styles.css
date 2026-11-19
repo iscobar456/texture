@@ -637,3 +637,27 @@ dialog .row button[value="ok"], dialog .row button.primary, #set-ocr-save, .dlg-
 .deleted-body { padding: 12px 16px 16px; min-width: 420px; max-width: 640px; max-height: 60vh; overflow: auto; }
 .deleted-item { align-items: center; justify-content: flex-start; padding: 6px 0; border-top: 1px solid var(--border); }
 .deleted-item .deleted-name { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+
+/* Own title bar (window-chrome.ts). Linux/Windows: no system decorations, so window buttons sit fixed in the top-right
+   corner (also on the sign-in screen), the header leaves room for them, and thin edges resize the window. macOS keeps
+   its traffic lights over the header's left end. */
+:root { --titlebar-h: 39px; }
+#win-controls { position: fixed; top: 0; right: 0; z-index: 50; display: flex; height: calc(var(--titlebar-h) - 1px); }
+.win-btn { width: 44px; height: 100%; padding: 0; border: none; background: none; color: var(--fg); display: grid; place-items: center;
+  cursor: default; opacity: .8; }
+.win-btn:hover { background: var(--hover); opacity: 1; }
+.win-btn:active { background: var(--press); }
+.win-close:hover, .win-close:active { background: var(--danger); color: var(--on-accent); }
+:root[data-platform="other"] header { padding-right: calc(10px + 3 * 44px); }
+:root[data-platform="mac"] header { padding-left: 80px; }
+header { min-height: var(--titlebar-h); box-sizing: border-box; user-select: none; -webkit-user-select: none; }
+.rz { position: fixed; z-index: 70; }
+.rz-n, .rz-s { left: 8px; right: 8px; height: 4px; cursor: ns-resize; }
+.rz-e, .rz-w { top: 8px; bottom: 8px; width: 4px; cursor: ew-resize; }
+.rz-n { top: 0; } .rz-s { bottom: 0; } .rz-e { right: 0; } .rz-w { left: 0; }
+.rz-ne, .rz-nw, .rz-se, .rz-sw { width: 8px; height: 8px; }
+.rz-ne { top: 0; right: 0; cursor: nesw-resize; } .rz-sw { bottom: 0; left: 0; cursor: nesw-resize; }
+.rz-nw { top: 0; left: 0; cursor: nwse-resize; } .rz-se { bottom: 0; right: 0; cursor: nwse-resize; }
+/* An undecorated window has no edge of its own; without this a dark theme melts into a dark desktop. */
+:root[data-platform="other"]:not([data-maximized]) body::after { content: ""; position: fixed; inset: 0; z-index: 80;
+  border: 1px solid var(--border); pointer-events: none; }

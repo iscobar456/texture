@@ -17,7 +17,8 @@
         "title": "Texture",
         "width": 1400,
         "height": 850,
-        "dragDropEnabled": false
+        "dragDropEnabled": false,
+        "decorations": false
       }
     ],
     "security": {

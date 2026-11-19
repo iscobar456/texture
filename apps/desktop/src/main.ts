@@ -18,6 +18,7 @@ import { initOcrKeyUi } from "./ocr-key-ui";
 import { createApi, type Photo } from "@texture/api";
 import { initLog, info as logInfo } from "./log";
 import { rustFetch } from "./transport";
+import { initWindowChrome } from "./window-chrome";
 import { runSync } from "./sync";
 import { EditorState } from "@codemirror/state";
 import { latexSource, snippetKeymap } from "./completions";
@@ -55,6 +56,7 @@ import {
 type Api = ReturnType<typeof createApi>;
 
 initLog();
+initWindowChrome();
 
 const $ = <T extends HTMLElement>(id: string) => document.getElementById(id) as T;
 // Keyboard-navigation marker: set when Tab is pressed, cleared on any pointer press.
