@@ -1,4 +1,4 @@
-import { invoke } from "@tauri-apps/api/core";
+import { call } from "./commands";
 
 const $ = <T extends HTMLElement>(id: string) => document.getElementById(id) as T;
 
@@ -13,17 +13,19 @@ export type Pending = {
   snippetsDirty: boolean;
 };
 
-type Doc = { path: string; dirty: boolean; remote_at: string | null; remote_path?: string | null; has_preview?: boolean; preview_dirty?: boolean };
-type Tombstone = { kind: string; path: string };
+type Doc = {
+  path: string; dirty: boolean; remote_at: string | null; remote_path?: string | null; has_preview?: boolean; preview_dirty?: boolean;
+  images_synced?: boolean; has_images?: boolean;
+};
 
 /** Reads the local sync state (dirty flags, pending deletions). Local only; never touches the network. */
 export async function collectPending(user: string): Promise<Pending> {
   const [docs, folders, templates, configs, deletions] = await Promise.all([
-    invoke<Doc[]>("list_documents", { user }),
-    invoke<Doc[]>("list_folders", { user }),
-    invoke<(Doc & { builtin: boolean })[]>("list_templates", { user }),
-    invoke<Doc[]>("list_configs", { user }),
-    invoke<Tombstone[]>("list_deletions", { user }),
+    call("list_documents", { user }),
+    call("list_folders", { user }),
+    call("list_templates", { user }),
+    call("list_configs", { user }),
+    call("list_deletions", { user }),
   ]);
   const p: Pending = { items: [], dirtyDocs: new Set(), dirtyTemplates: new Set(), snippetsDirty: false };
   const renamed = (d: Doc) => !!d.remote_path && d.remote_path !== d.path;
@@ -33,6 +35,8 @@ export async function collectPending(user: string): Promise<Pending> {
       p.items.push({ group: "Documents", label: d.remote_at ? d.path : `${d.path} (new)` });
     }
     if (d.preview_dirty && d.has_preview) p.items.push({ group: "Previews", label: d.path });
+    // Not yet confirmed to be on the server (new, or from before this was tracked: those are checked once).
+    if (d.images_synced === false && d.has_images) p.items.push({ group: "Images", label: d.path });
   }
   for (const f of folders) if (f.dirty || renamed(f) || f.remote_at === null) p.items.push({ group: "Folders", label: f.path });
   for (const t of templates) {

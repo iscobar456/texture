@@ -12,13 +12,20 @@
       <form id="login">
         <h2>Texture</h2>
         <p id="auth-msg">Sign in to continue.</p>
-        <input id="email" type="email" placeholder="Email" required />
-        <input id="password" type="password" placeholder="Password" required />
-        <button>Sign in</button>
+        <input id="email" type="email" placeholder="Email" required autocomplete="username" />
+        <input id="password" type="password" placeholder="Password" required autocomplete="current-password" />
+        <input id="password2" type="password" placeholder="Confirm password" autocomplete="new-password" hidden />
+        <button id="auth-submit">Sign in</button>
+        <p class="auth-links">
+          <a href="#" id="auth-signup">Create account</a>
+          <a href="#" id="auth-forgot">Forgot password?</a>
+          <a href="#" id="auth-back" hidden>Back to sign in</a>
+        </p>
       </form>
     </div>
 
     <div id="app" hidden>
+      <div id="startup-note" role="status" hidden>Restoring your documents from your account…</div>
       <header>
         <div class="menu">
           <button id="menu-button" class="hbtn" aria-haspopup="menu" aria-expanded="false" title="Menu">
@@ -69,11 +76,16 @@
             <button id="preview-export" class="preview-full" title="Export PDF…" aria-label="Export PDF">
               <svg viewBox="0 0 16 16" width="16" height="16" aria-hidden="true"><path d="M8 2v8M4.5 6.8L8 10.3l3.5-3.5M2.5 13.5h11" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"/></svg>
             </button>
-            <div id="pages"></div><pre id="log" hidden></pre>
+            <div id="pages"></div><div id="compile-errors" hidden></div><pre id="log" hidden></pre>
           </div>
           <div id="compile-bar" role="status" aria-live="polite">
             <span id="compile-state" class="muted">Not compiled yet</span>
+            <button type="button" id="compile-cancel" class="linklike" hidden title="Stop this compile">Cancel</button>
             <button type="button" id="compile-log-toggle" class="linklike" hidden>Show log</button>
+            <span class="spacer"></span>
+            <button type="button" id="zoom-out" class="icon-btn" aria-label="Zoom out" title="Zoom out">−</button>
+            <button type="button" id="zoom-label" class="linklike" title="Reset to 100%">100%</button>
+            <button type="button" id="zoom-in" class="icon-btn" aria-label="Zoom in" title="Zoom in">+</button>
           </div>
         </section>
         <div id="splitter2" class="splitter" role="separator" aria-orientation="vertical" aria-label="Resize photo inbox"
@@ -350,6 +362,8 @@
           <svg viewBox="0 0 16 16" width="16" height="16" aria-hidden="true"><path d="M13 8H3.5M7.5 3.5L3 8l4.5 4.5" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"/></svg>
         </button>
         <div id="crumbs"></div>
+        <span class="spacer"></span>
+        <button type="button" id="deleted-open" class="linklike" title="Documents deleted in the last 30 days">Recently deleted…</button>
       </div>
       <div id="doc-grid" class="grid"></div>
       <div id="tpl-grid" class="grid" hidden></div>
@@ -381,6 +395,18 @@
         <p class="error" id="move-error"></p>
         <div class="row"><button type="button" class="cancel">Cancel</button><button value="ok">Move</button></div>
       </form>
+    </dialog>
+
+    <dialog id="deleted-dialog">
+      <div class="dlg-head">
+        <strong>Recently deleted</strong>
+        <span class="spacer"></span>
+        <button type="button" class="cancel icon-btn" aria-label="Close" title="Close (Esc)"><svg viewBox="0 0 16 16" width="14" height="14" aria-hidden="true"><path d="M3.5 3.5l9 9M12.5 3.5l-9 9" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round"/></svg></button>
+      </div>
+      <div class="deleted-body">
+        <p class="muted">Deleted documents can be restored for 30 days. Restoring needs a connection.</p>
+        <div id="deleted-list"></div>
+      </div>
     </dialog>
 
     <dialog id="delete-dialog">

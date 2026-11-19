@@ -1,3 +1,4 @@
+import { call } from "./commands";
 import { PHOTO_MIME } from "./placement";
 import { invoke } from "@tauri-apps/api/core";
 import type { createApi, Photo } from "@texture/api";
@@ -130,7 +131,7 @@ export function initInbox(deps: InboxDeps) {
       job = (async () => {
         let blob: Blob;
         try {
-          blob = new Blob([await invoke<ArrayBuffer>("thumb_get", { user: deps.user(), id: p.id })], { type: "image/jpeg" });
+          blob = new Blob([await call("thumb_get", { user: deps.user(), id: p.id })], { type: "image/jpeg" });
         } catch {
           blob = await renderRotated(await original(p), 0, 640, 0.8);
           invoke("thumb_put", await bytesOf(blob), { headers: headers(p) }).catch(() => {});
@@ -224,7 +225,7 @@ export function initInbox(deps: InboxDeps) {
       if (undelivered.length) deps.api().markDelivered(undelivered).catch(() => {});
       // Housekeeping, once the list is on screen.
       const keep = [...pending, ...used, ...trash].map((p) => p.id);
-      invoke("thumb_prune", { user: deps.user(), keep }).catch(() => {});
+      call("thumb_prune", { user: deps.user(), keep }).catch(() => {});
       for (const [id, url] of thumbs) if (!keep.includes(id)) { URL.revokeObjectURL(url); thumbs.delete(id); }
       if (!purged) {
         purged = true;
@@ -756,8 +757,10 @@ export function initInbox(deps: InboxDeps) {
       bytes = await bytesOf(await renderRotated(blob, deg, 10_000, 0.92));
       ext = "jpg";
     }
+    // Image sync goes by file name, so each rotation of a photo needs its own.
+    const name = deg === 0 ? `${p.id}.${ext}` : `${p.id}-r${deg}.${ext}`;
     const rel = await invoke<string>("save_image", bytes, {
-      headers: { "x-user": deps.user(), "x-path": encodeURIComponent(target), "x-name": `${p.id}.${ext}` },
+      headers: { "x-user": deps.user(), "x-path": encodeURIComponent(target), "x-name": name },
     });
     return `\\begin{center}\n\\includegraphics[width=0.8\\linewidth]{${rel}}\n\\end{center}\n`;
   }
@@ -1088,7 +1091,7 @@ export function initInbox(deps: InboxDeps) {
   }
 
   async function hasKey(): Promise<boolean> {
-    if (await invoke<boolean>("has_api_key", { user: deps.user() })) return true;
+    if (await call("has_api_key", { user: deps.user() })) return true;
     batchNote.className = "ocr-state error";
     batchNote.textContent = "Add your Anthropic API key under Menu → Settings → Photo OCR, then try again.";
     return false;
@@ -1218,7 +1221,7 @@ export function initInbox(deps: InboxDeps) {
     const run = ++ocrRun;
     ocrRetry.disabled = true;
     ocrInsert.disabled = true;
-    if (!(await invoke<boolean>("has_api_key", { user: deps.user() }))) {
+    if (!(await call("has_api_key", { user: deps.user() }))) {
       setOcrState("Add your Anthropic API key under Menu → Settings → Photo OCR, then press Transcribe again.", "info");
       ocrRetry.disabled = false;
       return;

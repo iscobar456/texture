@@ -1,3 +1,4 @@
+import { call } from "./commands";
 import { invoke } from "@tauri-apps/api/core";
 import { save } from "@tauri-apps/plugin-dialog";
 import { EditorView, basicSetup } from "codemirror";
@@ -8,12 +9,18 @@ import { vim, Vim } from "@replit/codemirror-vim";
 import { softTheme, softHighlight } from "./theme";
 import { stex } from "@codemirror/legacy-modes/mode/stex";
 import { indentWithTab, undo } from "@codemirror/commands";
-import * as pdfjs from "pdfjs-dist";
-import workerUrl from "pdfjs-dist/build/pdf.worker.min.mjs?url";
+import { firstPageCanvas, initPreviewZoom, renderPdf, thumbPng } from "./preview";
+import { parseCompileErrors, type CompileError } from "./compile-log";
+import { checkForUpdate } from "./update-check";
+import { initDeleted } from "./deleted";
+import { initMenu } from "./menu";
+import { initOcrKeyUi } from "./ocr-key-ui";
 import { createApi, type Photo } from "@texture/api";
+import { initLog, info as logInfo } from "./log";
+import { rustFetch } from "./transport";
 import { runSync } from "./sync";
 import { EditorState } from "@codemirror/state";
-import { latexSource, showKey, snippetKeymap } from "./completions";
+import { latexSource, snippetKeymap } from "./completions";
 import {
   DEFAULT_SNIPPETS_TOML,
   SNIPPETS_CONFIG,
@@ -45,17 +52,32 @@ import {
   saveSettings, syncedSettingsToml, type Settings,
 } from "./settings";
 
-pdfjs.GlobalWorkerOptions.workerSrc = workerUrl;
-
 type Api = ReturnType<typeof createApi>;
-type DocInfo = { path: string; dirty: boolean; snippet: string; has_preview: boolean };
-type TemplateInfo = { path: string; builtin: boolean; dirty: boolean; has_preview: boolean };
-type FolderInfo = { path: string };
+
+initLog();
 
 const $ = <T extends HTMLElement>(id: string) => document.getElementById(id) as T;
 // Keyboard-navigation marker: set when Tab is pressed, cleared on any pointer press.
 window.addEventListener("keydown", (e) => { if (e.key === "Tab") document.documentElement.setAttribute("data-keynav", ""); }, true);
 window.addEventListener("pointerdown", () => document.documentElement.removeAttribute("data-keynav"), true);
+
+/** An error the user has already been told about; the catch-all below stays quiet about these. */
+class ReportedError extends Error {
+  reported = true;
+}
+
+// Catch-all: a failure nobody handled must not pass silently (it used to leave a blank or stuck window).
+let lastUnhandled = { text: "", at: 0 };
+window.addEventListener("unhandledrejection", (e) => {
+  const r = e.reason as { reported?: boolean; name?: string; message?: string } | undefined;
+  if (r?.name === "AbortError" || r?.name === "TimeoutError") console.warn("unhandled", e.reason); // logged, not toasted
+  if (r?.reported || r?.name === "AbortError" || r?.name === "TimeoutError" || r?.name === "RenderingCancelledException") return;
+  console.error("unhandled error", e.reason);
+  const text = String(r?.message ?? e.reason);
+  if (text === lastUnhandled.text && Date.now() - lastUnhandled.at < 10_000) return; // not the same thing over and over
+  lastUnhandled = { text, at: Date.now() };
+  toast(`Something went wrong: ${text}`);
+});
 
 /** One-off notices (export result, conflicts, errors) appear as toasts, not in the header. */
 const status = (s: string) => { if (s) toast(s); };
@@ -99,17 +121,40 @@ let pendingDoc: { kind: "document" | "template" | "snippets"; path: string } | n
 let saveTimer: number | undefined;
 let autoTimer: number | undefined;
 
+/** A save has failed and not succeeded since; the user was told once. */
+let saveFailing = false;
+
+/**
+ * Writes the pending edit to disk. If that fails the edit stays pending and is retried every few seconds, the
+ * user is told once, and the error is thrown, so callers about to replace the editor's text (opening another
+ * document, a sync) stop instead of discarding work that exists nowhere else.
+ */
 async function flushSave() {
   clearTimeout(saveTimer);
   if (pendingDoc === null) return;
   const p = pendingDoc;
   pendingDoc = null;
-  if (p.kind === "template") await invoke("save_template", { user, name: p.path, source: source(), overwrite: true });
-  else if (p.kind === "snippets") {
-    // Always saved, even with mistakes (it is work in progress); only a valid file becomes active.
-    await invoke("save_config", { user, name: p.path, source: source() });
-    applySnippetsText(source());
-  } else await invoke("save_source", { user, path: p.path, source: source() });
+  try {
+    if (p.kind === "template") await call("save_template", { user, name: p.path, source: source(), overwrite: true });
+    else if (p.kind === "snippets") {
+      // Always saved, even with mistakes (it is work in progress); only a valid file becomes active.
+      await call("save_config", { user, name: p.path, source: source() });
+      applySnippetsText(source());
+    } else await call("save_source", { user, path: p.path, source: source() });
+  } catch (e) {
+    if (pendingDoc === null) pendingDoc = p;
+    clearTimeout(saveTimer);
+    saveTimer = window.setTimeout(() => void flushSave().catch(() => {}), 5000);
+    if (!saveFailing) {
+      saveFailing = true;
+      toast(`Couldn't save your changes (${e}). Still trying; keep Texture open until this is resolved.`, { ms: 20_000 });
+    }
+    throw new ReportedError(`save failed: ${e}`);
+  }
+  if (saveFailing) {
+    saveFailing = false;
+    toast("Your changes are saved again");
+  }
   syncSoon();
 }
 
@@ -155,7 +200,7 @@ function createEditor(doc: string) {
             ? { kind: "template", path: templateName }
             : { kind: "document", path: docPath };
         clearTimeout(saveTimer);
-        saveTimer = window.setTimeout(() => void flushSave(), 800);
+        saveTimer = window.setTimeout(() => void flushSave().catch(() => {}), 800);
         if (settings.autoCompile && !snippetsOpen) {
           clearTimeout(autoTimer);
           autoTimer = window.setTimeout(() => void compile(true), 1500);
@@ -251,6 +296,7 @@ function renderBar() {
     el.append(bar.kind === "idle" ? "Not compiled yet" : bar.text);
     if (stale && bar.kind !== "idle") el.append(" · edited since");
   }
+  $("compile-cancel").hidden = bar.kind !== "compiling" || latexSetupRunning();
   const toggle = $("compile-log-toggle");
   const hasLog = bar.kind === "failed" || lastLog !== "";
   toggle.hidden = !hasLog;
@@ -262,7 +308,34 @@ function setLog(text: string | null) {
   if (text !== null) lastLog = text;
   $("log").hidden = text === null;
   if (text !== null) $("log").textContent = text;
+  showCompileErrors(text !== null && !snippetsOpen ? parseCompileErrors(text) : []);
   renderBar();
+}
+
+/** The errors found in the log, above it, each a link to its line in the editor. */
+function showCompileErrors(errors: CompileError[]) {
+  const box = $("compile-errors");
+  box.hidden = !errors.length;
+  box.replaceChildren(
+    ...errors.map((err) => {
+      const b = document.createElement("button");
+      b.type = "button";
+      b.className = "linklike";
+      const line = err.line;
+      b.textContent = line ? `Line ${line}: ${err.message}` : err.message;
+      if (line) b.addEventListener("click", () => goToLine(line));
+      else b.disabled = true;
+      return b;
+    }),
+  );
+}
+
+function goToLine(n: number) {
+  const v = view;
+  if (!v) return;
+  const line = v.state.doc.line(Math.min(Math.max(n, 1), v.state.doc.lines));
+  v.dispatch({ selection: { anchor: line.from }, effects: EditorView.scrollIntoView(line.from, { y: "center" }) });
+  v.focus();
 }
 
 function setBar(next: BarState) {
@@ -276,6 +349,7 @@ function resetBar() {
   lastLog = "";
   stale = false;
   $("log").hidden = true;
+  $("compile-errors").hidden = true;
   setBar({ kind: "idle" });
 }
 
@@ -284,6 +358,12 @@ function markStale() {
   stale = true;
   renderBar();
 }
+
+// Stops a compile that is taking too long (a document that loops, say). Anything queued behind it is dropped too.
+$("compile-cancel").addEventListener("click", () => {
+  queuedCompile = null;
+  void invoke("cancel_compile");
+});
 
 $("compile-log-toggle").addEventListener("click", () => {
   if ($("log").hidden) setLog(lastLog);
@@ -318,7 +398,7 @@ async function compile(quiet = false) {
   const tname = templateName;
   const scratch = tname !== null;
   try {
-    const bytes = new Uint8Array(await invoke<ArrayBuffer>("compile", { user, path: scratch ? tname : path, source: source(), scratch }));
+    const bytes = new Uint8Array(await call("compile", { user, path: scratch ? tname : path, source: source(), scratch }));
     if (epoch !== viewEpoch) return; // you moved on; this result belongs to something no longer open
     lastLog = "";
     setLog(null);
@@ -330,10 +410,16 @@ async function compile(quiet = false) {
   } catch (e) {
     if (epoch !== viewEpoch) return;
     const wasStale = stale;
-    lastLog = String(e);
-    // A manual compile shows the log at once; an automatic one only reports it, with a link.
-    setBar({ kind: "failed", text: "✗ Compile failed" });
-    setLog(quiet ? null : lastLog);
+    if (String(e) === "Compile cancelled") {
+      lastLog = "";
+      setBar({ kind: "ok", text: "Compile cancelled" });
+      setLog(null);
+    } else {
+      lastLog = String(e);
+      // A manual compile shows the log at once; an automatic one only reports it, with a link.
+      setBar({ kind: "failed", text: "✗ Compile failed" });
+      setLog(quiet ? null : lastLog);
+    }
     if (wasStale) markStale();
   } finally {
     compiling = false;
@@ -343,44 +429,6 @@ async function compile(quiet = false) {
       void compile(next.quiet);
     }
   }
-}
-
-async function renderPdf(data: Uint8Array): Promise<{ first: HTMLCanvasElement | undefined; pages: number }> {
-  const pdf = await pdfjs.getDocument({ data }).promise;
-  const canvases: HTMLCanvasElement[] = [];
-  for (let n = 1; n <= pdf.numPages; n++) {
-    const page = await pdf.getPage(n);
-    const viewport = page.getViewport({ scale: 2 });
-    const canvas = document.createElement("canvas");
-    canvas.width = viewport.width;
-    canvas.height = viewport.height;
-    await page.render({ canvas, viewport }).promise;
-    canvases.push(canvas);
-  }
-  $("pages").replaceChildren(...canvases); // swap at the end to avoid flicker
-  return { first: canvases[0], pages: canvases.length };
-}
-
-/** A page canvas shrunk to a 360px-wide PNG, for thumbnails. */
-async function thumbPng(page: HTMLCanvasElement): Promise<Uint8Array | null> {
-  const thumb = document.createElement("canvas");
-  thumb.width = 360;
-  thumb.height = Math.round((page.height / page.width) * 360);
-  thumb.getContext("2d")!.drawImage(page, 0, 0, thumb.width, thumb.height);
-  const blob = await new Promise<Blob | null>((r) => thumb.toBlob(r, "image/png"));
-  return blob ? new Uint8Array(await blob.arrayBuffer()) : null;
-}
-
-/** Renders only page 1 of a PDF (for thumbnails; the preview pane uses `renderPdf`). */
-async function firstPageCanvas(data: Uint8Array): Promise<HTMLCanvasElement> {
-  const pdf = await pdfjs.getDocument({ data }).promise;
-  const page = await pdf.getPage(1);
-  const viewport = page.getViewport({ scale: 2 });
-  const canvas = document.createElement("canvas");
-  canvas.width = viewport.width;
-  canvas.height = viewport.height;
-  await page.render({ canvas, viewport }).promise;
-  return canvas;
 }
 
 /** Stores a small PNG of page 1 for the document picker. Best effort. */
@@ -416,7 +464,7 @@ $("export-pdf").addEventListener("click", async () => {
   if (!dest.toLowerCase().endsWith(".pdf")) dest += ".pdf";
   try {
     await flushSave();
-    await invoke("export_pdf", { user, path: target, source: source(), scratch: templateName !== null, dest });
+    await call("export_pdf", { user, path: target, source: source(), scratch: templateName !== null, dest });
     status(`Exported to ${dest}`);
   } catch (e) {
     setLog(String(e));
@@ -426,6 +474,7 @@ $("export-pdf").addEventListener("click", async () => {
 
 $("preview-export").addEventListener("click", () => $("export-pdf").click());
 
+initPreviewZoom();
 initShortcutsUi(() => settings.editing === "vim");
 initDialogs(() => view?.focus());
 initLatexSetup(renderBar); // the compile bar says so when a compile is waiting on the first-run download
@@ -509,7 +558,7 @@ $("snip-original").addEventListener("click", () => void openUrl(SNIPPETS_ORIGINA
 async function openSnippetsFile() {
   await flushSave();
   if (!snippetsOpen) snippetsReturn = { template: templateName };
-  const text = (await invoke<string | null>("load_config", { user, name: SNIPPETS_CONFIG })) ?? DEFAULT_SNIPPETS_TOML;
+  const text = (await call("load_config", { user, name: SNIPPETS_CONFIG })) ?? DEFAULT_SNIPPETS_TOML;
   viewEpoch++;
   snippetsOpen = true;
   templateName = null;
@@ -526,7 +575,7 @@ async function openSnippetsFile() {
 
 async function resetSnippets() {
   await flushSave();
-  await invoke("save_config", { user, name: SNIPPETS_CONFIG, source: DEFAULT_SNIPPETS_TOML });
+  await call("save_config", { user, name: SNIPPETS_CONFIG, source: DEFAULT_SNIPPETS_TOML });
   applySnippetsText(DEFAULT_SNIPPETS_TOML);
   if (snippetsOpen) setDoc(DEFAULT_SNIPPETS_TOML);
   syncSoon();
@@ -534,12 +583,12 @@ async function resetSnippets() {
 
 /** At sign-in: load the user's file, or create it from the defaults (plus any snippets from the old editor). */
 async function initSnippets() {
-  let text = await invoke<string | null>("load_config", { user, name: SNIPPETS_CONFIG });
+  let text = await call("load_config", { user, name: SNIPPETS_CONFIG });
   if (text === null) {
     const withOld = DEFAULT_SNIPPETS_TOML + legacySnippetsToml();
     // Old snippets are only carried over if the result is still a valid file.
     text = parseSnippets(withOld).config ? withOld : DEFAULT_SNIPPETS_TOML;
-    await invoke("save_config", { user, name: SNIPPETS_CONFIG, source: text });
+    await call("save_config", { user, name: SNIPPETS_CONFIG, source: text });
     clearLegacySnippets();
     syncSoon();
   }
@@ -590,86 +639,7 @@ function showSettings() {
   field.auto.checked = settings.autoCompile;
 }
 
-// -- OCR API key (stored by the Rust side; the key itself never comes back to the page) --
-const ocrKey = $<HTMLInputElement>("set-ocr-key");
-const ocrStatus = $("set-ocr-status");
-const ocrBadge = $("set-ocr-badge");
-const ocrSave = $<HTMLButtonElement>("set-ocr-save");
-const ocrTest = $<HTMLButtonElement>("set-ocr-test");
-const ocrRemove = $<HTMLButtonElement>("set-ocr-remove");
-const ocrShow = $<HTMLButtonElement>("set-ocr-show");
-let keySaved = false;
-
-function keyNote(text: string, kind: "" | "ok" | "err" = "") {
-  ocrStatus.textContent = text;
-  ocrStatus.className = `muted ${kind}`.trim();
-}
-
-/** Save needs something typed; Test and Remove need a saved key. */
-function syncKeyButtons(busy = false) {
-  ocrSave.disabled = busy || !ocrKey.value.trim();
-  ocrTest.disabled = busy || !keySaved;
-  ocrRemove.disabled = busy || !keySaved;
-}
-
-async function refreshKeyStatus() {
-  keySaved = await invoke<boolean>("has_api_key", { user });
-  ocrBadge.textContent = keySaved ? "Key saved on this device" : "No key saved";
-  ocrBadge.classList.toggle("saved", keySaved);
-  ocrKey.placeholder = keySaved ? "Paste a new key to replace the saved one" : "sk-ant-…";
-  syncKeyButtons();
-}
-
-async function keyAction(label: string, fn: () => Promise<void>) {
-  keyNote(`${label}…`);
-  syncKeyButtons(true);
-  try {
-    await fn();
-  } catch (e) {
-    keyNote(String(e), "err");
-  }
-  syncKeyButtons();
-}
-
-ocrKey.addEventListener("input", () => {
-  syncKeyButtons();
-  keyNote("");
-});
-ocrKey.addEventListener("keydown", (e) => {
-  if (e.key === "Enter" && !ocrSave.disabled) {
-    e.preventDefault();
-    ocrSave.click();
-  }
-});
-ocrShow.addEventListener("click", () => {
-  const show = ocrKey.type === "password";
-  ocrKey.type = show ? "text" : "password";
-  ocrShow.textContent = show ? "Hide" : "Show";
-  ocrShow.setAttribute("aria-pressed", String(show));
-});
-
-ocrSave.addEventListener("click", () =>
-  keyAction("Saving", async () => {
-    if (!ocrKey.value.trim()) throw new Error("Paste a key first.");
-    await invoke("set_api_key", { user, key: ocrKey.value });
-    ocrKey.value = "";
-    await refreshKeyStatus();
-    keyNote("Saved. Use Test key to check it works.", "ok");
-  }),
-);
-ocrTest.addEventListener("click", () =>
-  keyAction("Testing", async () => {
-    await invoke("test_api_key", { user });
-    keyNote("✓ The key works.", "ok");
-  }),
-);
-ocrRemove.addEventListener("click", () =>
-  keyAction("Removing", async () => {
-    await invoke("set_api_key", { user, key: "" });
-    await refreshKeyStatus();
-    keyNote("Key removed.");
-  }),
-);
+const ocrKeyUi = initOcrKeyUi(() => user);
 
 /** Replaces the settings. The ones that follow the account (settings.ts) also go to the synced file when they change. */
 function setSettings(next: Settings) {
@@ -681,7 +651,7 @@ function setSettings(next: Settings) {
 
 async function pushSyncedSettings() {
   try {
-    await invoke("save_config", { user, name: SETTINGS_CONFIG, source: syncedSettingsToml(settings) });
+    await call("save_config", { user, name: SETTINGS_CONFIG, source: syncedSettingsToml(settings) });
     syncSoon();
   } catch (e) {
     console.warn("could not save the synced settings", e);
@@ -694,7 +664,7 @@ async function pushSyncedSettings() {
  * yet is seeded from this device, but only if something here differs from the defaults.
  */
 async function loadSyncedSettings() {
-  const text = await invoke<string | null>("load_config", { user, name: SETTINGS_CONFIG });
+  const text = await call("load_config", { user, name: SETTINGS_CONFIG });
   if (text === null) {
     if (settings.ocrPrompt !== DEFAULTS.ocrPrompt || settings.defaultTemplate !== DEFAULTS.defaultTemplate) await pushSyncedSettings();
     return;
@@ -766,25 +736,23 @@ $("settings-reset").addEventListener("click", () => {
 
 $("open-settings").addEventListener("click", async () => {
   showSettings();
-  const templates = await invoke<TemplateInfo[]>("list_templates", { user });
+  const templates = await call("list_templates", { user });
   field.template.replaceChildren(...templates.map((t) => new Option(t.path, t.path)));
   field.template.value = templates.some((t) => t.path === settings.defaultTemplate) ? settings.defaultTemplate : templates[0].path;
   const email = (await api.sb.auth.getSession()).data.session?.user.email;
   $("set-account").textContent = email ? `Signed in as ${email}` : "";
-  ocrKey.value = "";
-  keyNote("");
-  void refreshKeyStatus();
+  ocrKeyUi.reset();
   $<HTMLDialogElement>("settings-dialog").showModal();
 });
 
 // ---- quick switcher (Ctrl+P) ----
 const switcher = initSwitcher({
-  docs: () => invoke<DocInfo[]>("list_documents", { user }),
+  docs: () => call("list_documents", { user }),
   recents,
   current: () => (templateName === null && !snippetsOpen ? docPath : ""),
   open: (path) => openDocument(path),
   create: async (path) => {
-    await invoke("create_document", { user, path, template: await defaultTemplateName() });
+    await call("create_document", { user, path, template: await defaultTemplateName() });
     await openDocument(path);
   },
 });
@@ -819,61 +787,7 @@ document.addEventListener(
   true,
 );
 
-// ---- menu ----
-const menuList = $("menu-list");
-const menuButton = $<HTMLButtonElement>("menu-button");
-const menuItems = () => [...menuList.querySelectorAll<HTMLButtonElement>('button[role="menuitem"]:not(:disabled)')];
-
-// Shortcut hints come from the same key names the editor uses, so they read ⌘ on a Mac.
-document.querySelectorAll<HTMLElement>("#menu-list kbd[data-key]").forEach((k) => {
-  k.textContent = showKey(k.dataset.key!).split("-").join("+");
-});
-
-function setMenu(open: boolean, focusFirst = false) {
-  const hadFocus = menuList.contains(document.activeElement);
-  menuList.hidden = !open;
-  menuButton.setAttribute("aria-expanded", String(open));
-  if (open && focusFirst) menuItems()[0]?.focus();
-  if (!open && hadFocus) menuButton.focus(); // keyboard users land back on the button
-}
-
-menuButton.addEventListener("click", (e) => {
-  e.stopPropagation();
-  setMenu(menuList.hasAttribute("hidden"), true);
-});
-menuButton.addEventListener("keydown", (e) => {
-  if (e.key === "ArrowDown") {
-    e.preventDefault();
-    setMenu(true, true);
-  }
-});
-
-// Arrow keys move, Home/End jump, a typed letter jumps to the next item starting with it.
-menuList.addEventListener("keydown", (e) => {
-  const items = menuItems();
-  const i = items.indexOf(document.activeElement as HTMLButtonElement);
-  const go = (n: number) => { e.preventDefault(); items[(n + items.length) % items.length]?.focus(); };
-  if (e.key === "ArrowDown") go(i + 1);
-  else if (e.key === "ArrowUp") go(i - 1);
-  else if (e.key === "Home") go(0);
-  else if (e.key === "End") go(items.length - 1);
-  else if (e.key === "Tab") setMenu(false);
-  else if (e.key.length === 1 && /\S/.test(e.key) && !e.ctrlKey && !e.metaKey) {
-    const k = e.key.toLowerCase();
-    const order = [...items.slice(i + 1), ...items.slice(0, i + 1)];
-    order.find((b) => b.textContent!.trim().toLowerCase().startsWith(k))?.focus();
-  }
-});
-
-// Any item (or a click elsewhere, or Escape) closes the menu.
-menuList.addEventListener("click", () => {
-  menuList.hidden = true;
-  menuButton.setAttribute("aria-expanded", "false");
-  // Back to typing, unless the item opened a dialog (which has taken focus).
-  if (!document.querySelector("dialog[open]")) view?.focus();
-});
-document.addEventListener("click", () => setMenu(false));
-document.addEventListener("keydown", (e) => { if (e.key === "Escape" && !menuList.hidden) setMenu(false); });
+initMenu(() => view?.focus());
 
 // ---- documents, folders, templates ----
 const lastKey = () => `texture:last:${user}`;
@@ -903,13 +817,15 @@ function recordRecent(path: string) {
 
 async function openDocument(path: string) {
   await flushSave();
+  // Read it before anything changes: if it cannot be read, the editor must keep pointing at what it shows, or the
+  // next keystroke would save the old document's text under the new one's name.
+  const text = await call("load_source", { user, path });
   viewEpoch++;
   docPath = path;
   templateName = null;
   snippetsOpen = false;
   syncSnippetsBar();
   try { localStorage.setItem(lastKey(), path); } catch {}
-  const text = await invoke<string>("load_source", { user, path });
   if (view) setDoc(text);
   else createEditor(text);
   applyEditorMode();
@@ -925,11 +841,11 @@ async function openDocument(path: string) {
 
 async function openTemplate(name: string) {
   await flushSave();
+  const text = await call("read_template", { user, name }); // before any state changes, as in openDocument
   viewEpoch++;
   templateName = name;
   snippetsOpen = false;
   syncSnippetsBar();
-  const text = await invoke<string>("read_template", { user, name });
   if (view) setDoc(text);
   else createEditor(text);
   applyEditorMode();
@@ -979,8 +895,8 @@ async function renderPicker() {
   previewUrls.forEach((u) => URL.revokeObjectURL(u));
   previewUrls = [];
   const [docs, folderInfos] = await Promise.all([
-    invoke<DocInfo[]>("list_documents", { user }),
-    invoke<FolderInfo[]>("list_folders", { user }),
+    call("list_documents", { user }),
+    call("list_folders", { user }),
   ]);
   const folders = folderInfos.map((f) => f.path);
 
@@ -1046,7 +962,7 @@ async function renderPicker() {
     const thumb = document.createElement("div");
     thumb.className = "thumb";
     if (d.has_preview) {
-      invoke<ArrayBuffer>("read_preview", { user, path: d.path })
+      call("read_preview", { user, path: d.path })
         .then((buf) => {
           const url = URL.createObjectURL(new Blob([buf], { type: "image/png" }));
           previewUrls.push(url);
@@ -1143,7 +1059,7 @@ function followMove(from: string, to: string) {
 
 async function doMove(from: string, to: string) {
   await flushSave(); // pending edits belong to the old path
-  await invoke("move_item", { user, from, to });
+  await call("move_item", { user, from, to });
   followMove(from, to);
   syncSoon();
 }
@@ -1182,7 +1098,7 @@ $("rename-form").addEventListener("submit", async (e) => {
   try {
     if (renameTemplate) {
       await flushSave();
-      await invoke("rename_template", { user, from: renameFrom, to });
+      await call("rename_template", { user, from: renameFrom, to });
       syncSoon();
       if (templateName === renameFrom) await openTemplate(to);
     } else await doMove(renameFrom, to);
@@ -1197,7 +1113,7 @@ $("rename-form").addEventListener("submit", async (e) => {
 let moveFrom = "";
 async function askMove(path: string, kind: "document" | "folder") {
   moveFrom = path;
-  const folders = (await invoke<FolderInfo[]>("list_folders", { user })).map((f) => f.path);
+  const folders = (await call("list_folders", { user })).map((f) => f.path);
   // A folder can't be moved into itself or anything inside it.
   const targets = folders.filter((f) => kind === "document" || (f !== path && !f.startsWith(path + "/")));
   const sel = $<HTMLSelectElement>("move-target");
@@ -1243,8 +1159,8 @@ function askDelete(path: string, kind: "document" | "folder" | "template") {
     kind === "template"
       ? `Delete the template "${path}"? This also deletes it on your other devices and cannot be undone.`
       : kind === "folder"
-      ? `Delete the folder "${baseOf(path)}" and everything in it? This also deletes it on your other devices and cannot be undone.`
-      : `Delete "${baseOf(path)}"? This also deletes it on your other devices and cannot be undone.`;
+      ? `Delete the folder "${baseOf(path)}" and everything in it? This also deletes it on your other devices. Documents in it that were uploaded can be restored from Recently deleted for 30 days.`
+      : `Delete "${baseOf(path)}"? This also deletes it on your other devices. If it was uploaded, it can be restored from Recently deleted for 30 days.`;
   $("delete-error").textContent = "";
   $<HTMLDialogElement>("delete-dialog").showModal();
 }
@@ -1265,8 +1181,8 @@ $("delete-form").addEventListener("submit", async (e) => {
   }
   try {
     await flushSave();
-    if (deleteKind === "template") await invoke("delete_template", { user, name: deletePath });
-    else await invoke("delete_item", { user, path: deletePath });
+    if (deleteKind === "template") await call("delete_template", { user, name: deletePath });
+    else await call("delete_item", { user, path: deletePath });
   } catch (err) {
     e.preventDefault();
     $("delete-error").textContent = String(err);
@@ -1284,16 +1200,16 @@ $("delete-form").addEventListener("submit", async (e) => {
 
 /** The user's default template if it still exists (e.g. not the removed "Homework" built-in), else Blank. */
 async function defaultTemplateName(): Promise<string> {
-  const templates = await invoke<TemplateInfo[]>("list_templates", { user });
+  const templates = await call("list_templates", { user });
   return templates.some((t) => t.path === settings.defaultTemplate) ? settings.defaultTemplate : "Blank";
 }
 
 /** Opens some document, creating one if the account has none (e.g. after deleting the open one). */
 async function openAnyDocument() {
-  let docs = await invoke<DocInfo[]>("list_documents", { user });
+  let docs = await call("list_documents", { user });
   if (!docs.length) {
-    await invoke("create_document", { user, path: "Untitled", template: await defaultTemplateName() });
-    docs = await invoke<DocInfo[]>("list_documents", { user });
+    await call("create_document", { user, path: "Untitled", template: await defaultTemplateName() });
+    docs = await call("list_documents", { user });
   }
   await openDocument(docs[0].path);
 }
@@ -1310,7 +1226,7 @@ $("folder-form").addEventListener("submit", async (e) => {
   const name = $<HTMLInputElement>("folder-name").value.trim();
   const path = pickerFolder ? `${pickerFolder}/${name}` : name;
   try {
-    await invoke("create_folder", { user, path });
+    await call("create_folder", { user, path });
   } catch (err) {
     e.preventDefault();
     $("folder-error").textContent = String(err);
@@ -1322,7 +1238,7 @@ $("folder-form").addEventListener("submit", async (e) => {
 
 // -- new document (created in the folder the picker is showing) --
 $("new-document").addEventListener("click", async () => {
-  const templates = await invoke<TemplateInfo[]>("list_templates", { user });
+  const templates = await call("list_templates", { user });
   const tplSelect = $<HTMLSelectElement>("new-template");
   tplSelect.replaceChildren(...templates.map((t) => new Option(t.path, t.path)));
   if (templates.some((t) => t.path === settings.defaultTemplate)) tplSelect.value = settings.defaultTemplate;
@@ -1337,7 +1253,7 @@ $("new-form").addEventListener("submit", async (e) => {
   const name = $<HTMLInputElement>("new-name").value.trim();
   const path = pickerFolder ? `${pickerFolder}/${name}` : name;
   try {
-    await invoke("create_document", { user, path, template: $<HTMLSelectElement>("new-template").value });
+    await call("create_document", { user, path, template: $<HTMLSelectElement>("new-template").value });
   } catch (err) {
     e.preventDefault(); // keep the dialog open
     $("new-error").textContent = String(err);
@@ -1373,12 +1289,12 @@ $("tpl-form").addEventListener("submit", async (e) => {
   const name = $<HTMLInputElement>("tpl-name").value.trim();
   try {
     await flushSave(); // so the template reflects what's on screen if this is the open document
-    await invoke("save_template", {
+    await call("save_template", {
       user,
       name,
       source: tplFrom
-        ? await invoke<string>("load_source", { user, path: tplFrom })
-        : await invoke<string>("read_template", { user, name: "Blank" }),
+        ? await call("load_source", { user, path: tplFrom })
+        : await call("read_template", { user, name: "Blank" }),
       overwrite: tplOverwrite,
     });
   } catch (err) {
@@ -1410,7 +1326,7 @@ let thumbRun = 0; // bumped on every render, so an older background run stops wh
 /** Shows the saved thumbnail in `thumb`. Returns false if there isn't one. */
 async function showTemplateThumb(name: string, thumb: HTMLElement): Promise<boolean> {
   try {
-    const buf = await invoke<ArrayBuffer>("read_template_preview", { user, name });
+    const buf = await call("read_template_preview", { user, name });
     const url = URL.createObjectURL(new Blob([buf], { type: "image/png" }));
     templateUrls.push(url);
     const img = document.createElement("img");
@@ -1428,7 +1344,7 @@ async function buildMissingThumbs(missing: { name: string; thumb: HTMLElement }[
     if (run !== thumbRun || !$<HTMLDialogElement>("picker").open || pickerTab !== "templates") return;
     m.thumb.classList.add("loading");
     try {
-      const pdf = new Uint8Array(await invoke<ArrayBuffer>("compile_template_preview", { user, name: m.name }));
+      const pdf = new Uint8Array(await call("compile_template_preview", { user, name: m.name }));
       const png = await thumbPng(await firstPageCanvas(pdf));
       if (png) {
         await invoke("save_template_preview", png, { headers: { "x-user": user, "x-name": encodeURIComponent(m.name) } });
@@ -1448,7 +1364,7 @@ async function renderTemplates() {
   templateUrls = [];
   const run = ++thumbRun;
   // The built-in Blank is only the fallback for new documents; it is not offered for editing here.
-  const templates = (await invoke<TemplateInfo[]>("list_templates", { user })).filter((t) => !t.builtin);
+  const templates = (await call("list_templates", { user })).filter((t) => !t.builtin);
   const missing: { name: string; thumb: HTMLElement }[] = [];
   const cards = templates.map((t) => {
     const card = document.createElement("div");
@@ -1513,6 +1429,20 @@ function syncSoon() {
 }
 
 let syncRun: Promise<void> | null = null;
+/** Stored files of long-deleted documents are cleaned up once per session, after the first pass that worked. */
+let purgedDeleted = false;
+
+initDeleted({
+  api: () => api,
+  // A pass already under way may have listed the server before the restore; run one that certainly sees it.
+  syncNow: async () => {
+    clearTimeout(syncTimer);
+    if (syncRun) await syncRun;
+    await doSync();
+  },
+  status,
+  onRestored: () => { if ($<HTMLDialogElement>("picker").open) void refreshPicker(); },
+});
 
 /** One pass at a time; a caller that arrives mid-pass shares it. */
 function doSync(): Promise<void> {
@@ -1520,6 +1450,9 @@ function doSync(): Promise<void> {
   if (!syncRun) syncRun = runPass().finally(() => (syncRun = null));
   return syncRun;
 }
+
+/** When the last pass failed, so the log shows how long an outage lasted; null while passes succeed. */
+let syncFailingSince: number | null = null;
 
 async function runPass() {
   syncUi.syncing();
@@ -1540,21 +1473,30 @@ async function runPass() {
     // Reload the open document if the server copy replaced it. flushSave() above means no edits were lost.
     if (res.configsPulled.includes(SETTINGS_CONFIG)) await loadSyncedSettings();
     if (res.configsPulled.includes(SNIPPETS_CONFIG)) {
-      const t = await invoke<string | null>("load_config", { user, name: SNIPPETS_CONFIG });
+      const t = await call("load_config", { user, name: SNIPPETS_CONFIG });
       if (t !== null) {
         applySnippetsText(t);
         if (snippetsOpen) setDoc(t);
       }
     }
-    if (templateName === null && !snippetsOpen && res.pulled.includes(docPath)) setDoc(await invoke<string>("load_source", { user, path: docPath }));
+    if (templateName === null && !snippetsOpen && res.pulled.includes(docPath)) setDoc(await call("load_source", { user, path: docPath }));
     // The open document was deleted on another device (and had no local edits to keep it alive).
     if (templateName === null && !snippetsOpen && docPath && res.removed.some((p) => remap(docPath, p, "\0") !== docPath)) await openAnyDocument();
     if ($<HTMLDialogElement>("picker").open) void refreshPicker();
     if (res.errors.length) console.warn("sync errors", res.errors);
     if (res.conflicts.length) status(`Conflict: server version kept as "${res.conflicts.join('", "')}"`);
     syncUi.done({ errors: res.errors, conflicts: res.conflicts });
+    if (syncFailingSince !== null) {
+      logInfo(`sync working again after ${Math.round((Date.now() - syncFailingSince) / 1000)}s of failures`);
+      syncFailingSince = null;
+    }
+    if (!purgedDeleted) {
+      purgedDeleted = true;
+      void api.purgeDeletedFiles().catch(() => {});
+    }
   } catch (e) {
     console.warn("sync failed", e);
+    syncFailingSince ??= Date.now();
     syncUi.failed(String((e as Error)?.message ?? e));
   }
 }
@@ -1589,12 +1531,22 @@ async function start(userId: string) {
 
   syncUi.start();
   await startLatexSetup(); // first run: downloads LaTeX support files, dialog shows progress
-  // Pull first on a fresh device so we don't invent a document that the server already has.
-  await doSync();
+  // A device that already holds documents opens straight away and syncs behind the scenes, so a slow or dead
+  // connection never delays getting to work. An empty one (a new device, or a new account) waits for the first
+  // sync, so it restores what the account has instead of inventing a document the server already holds.
+  if ((await call("list_documents", { user })).length) void doSync();
+  else {
+    $("startup-note").hidden = false;
+    try {
+      await doSync();
+    } finally {
+      $("startup-note").hidden = true;
+    }
+  }
   await initSnippets();
   await loadSyncedSettings().catch((e) => console.warn("could not load the synced settings", e));
 
-  const docs = await invoke<DocInfo[]>("list_documents", { user });
+  const docs = await call("list_documents", { user });
   let last: string | null = null;
   try { last = localStorage.getItem(lastKey()); } catch {}
   const remembered = docs.find((d) => d.path === last)?.path;
@@ -1602,7 +1554,11 @@ async function start(userId: string) {
   else await openAnyDocument();
 
   api.onInboxChange(() => void inbox.refresh());
+  void checkForUpdate();
 }
+
+/** Where email links return to; the same value as `authRedirect` in the phone app (lib/supabase.dart). */
+const AUTH_REDIRECT = "dev.texture.mobile://login-callback/";
 
 async function initAuth() {
   const url = import.meta.env.VITE_SUPABASE_URL as string | undefined;
@@ -1613,7 +1569,7 @@ async function initAuth() {
     $("login").querySelectorAll("input,button").forEach((el) => ((el as HTMLInputElement).disabled = true));
     return;
   }
-  api = createApi(url, key);
+  api = createApi(url, key, { fetch: rustFetch });
 
   api.sb.auth.onAuthStateChange((event) => {
     if (event === "SIGNED_OUT") location.reload();
@@ -1624,15 +1580,67 @@ async function initAuth() {
     await api.sb.auth.signOut();
   });
 
+  // One form, three modes. Email links (confirm, reset) return to the phone app's scheme: it is the only redirect
+  // registered with the server, and the phone app is where a new password gets chosen.
+  type AuthMode = "signin" | "signup" | "reset";
+  let mode: AuthMode = "signin";
+  const email = $<HTMLInputElement>("email");
+  const password = $<HTMLInputElement>("password");
+  const password2 = $<HTMLInputElement>("password2");
+  const submit = $<HTMLButtonElement>("auth-submit");
+
+  function setMode(next: AuthMode, note?: string) {
+    mode = next;
+    password.hidden = next === "reset";
+    password.required = next !== "reset";
+    password.autocomplete = next === "signup" ? "new-password" : "current-password";
+    password2.hidden = next !== "signup";
+    password2.required = next === "signup";
+    password.value = "";
+    password2.value = "";
+    submit.textContent = next === "signin" ? "Sign in" : next === "signup" ? "Create account" : "Send reset link";
+    $("auth-signup").hidden = next !== "signin";
+    $("auth-forgot").hidden = next !== "signin";
+    $("auth-back").hidden = next === "signin";
+    msg.textContent = note ?? (next === "signin" ? "Sign in to continue." : next === "signup" ? "Create your Texture account." : "Enter your email to get a password reset link.");
+  }
+  for (const [id, m] of [["auth-signup", "signup"], ["auth-forgot", "reset"], ["auth-back", "signin"]] as const) {
+    $(id).addEventListener("click", (e) => {
+      e.preventDefault();
+      setMode(m);
+    });
+  }
+
   $("login").addEventListener("submit", async (e) => {
     e.preventDefault();
-    msg.textContent = "Signing in…";
-    const { data, error } = await api.sb.auth.signInWithPassword({
-      email: $<HTMLInputElement>("email").value,
-      password: $<HTMLInputElement>("password").value,
-    });
-    if (error || !data.user) msg.textContent = error?.message ?? "Sign-in failed";
-    else await start(data.user.id);
+    submit.disabled = true;
+    try {
+      if (mode === "signin") {
+        msg.textContent = "Signing in…";
+        const { data, error } = await api.sb.auth.signInWithPassword({ email: email.value, password: password.value });
+        if (error || !data.user) msg.textContent = error?.message ?? "Sign-in failed";
+        else await start(data.user.id);
+      } else if (mode === "signup") {
+        if (password.value.length < 6) return void (msg.textContent = "Use a password of at least 6 characters.");
+        if (password.value !== password2.value) return void (msg.textContent = "The two passwords don't match.");
+        msg.textContent = "Creating your account…";
+        const { data, error } = await api.sb.auth.signUp({
+          email: email.value, password: password.value, options: { emailRedirectTo: AUTH_REDIRECT },
+        });
+        if (error) msg.textContent = error.message;
+        else if (data.session && data.user) await start(data.user.id); // email confirmation is switched off
+        else setMode("signin", "Check your email and open the confirmation link (on any device), then sign in here.");
+      } else {
+        msg.textContent = "Sending…";
+        const { error } = await api.sb.auth.resetPasswordForEmail(email.value, { redirectTo: AUTH_REDIRECT });
+        if (error) msg.textContent = error.message;
+        else setMode("signin", "If that address has an account, a reset link is on its way. Open it on your phone, with the Texture app installed, to choose a new password.");
+      }
+    } catch (err) {
+      msg.textContent = `Couldn't reach the server: ${(err as Error)?.message ?? err}`;
+    } finally {
+      submit.disabled = false;
+    }
   });
 
   // The session is persisted, so a returning user is signed in even when offline.

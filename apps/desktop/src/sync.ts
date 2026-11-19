@@ -1,3 +1,4 @@
+import { call } from "./commands";
 import { invoke } from "@tauri-apps/api/core";
 import type { createApi, DocKind, RemoteDoc } from "@texture/api";
 
@@ -14,8 +15,9 @@ type LocalDoc = {
   has_preview?: boolean;
   preview_at?: string | null;
   preview_dirty?: boolean;
+  /** False until this document's images are known to match the server (see `Meta.images_synced` in lib.rs). */
+  images_synced?: boolean;
 };
-type Tombstone = { kind: DocKind; path: string; id?: string | null; remote_at: string };
 
 export type SyncResult = {
   /** Documents whose local files were replaced by a newer server copy. */
@@ -43,10 +45,10 @@ const LIST_CMD: Record<DocKind, string> = {
 
 async function readLocal(user: string, kind: DocKind, path: string): Promise<string> {
   if (kind === "folder") return "";
-  if (kind === "config") return (await invoke<string | null>("load_config", { user, name: path })) ?? "";
+  if (kind === "config") return (await call("load_config", { user, name: path })) ?? "";
   return kind === "document"
-    ? invoke<string>("load_source", { user, path })
-    : invoke<string>("read_template", { user, name: path });
+    ? call("load_source", { user, path })
+    : call("read_template", { user, name: path });
 }
 
 const depth = (p: string) => p.split("/").length;
@@ -57,12 +59,12 @@ const depth = (p: string) => p.split("/").length;
  * normal pass below pulls it back.
  */
 async function syncDeletions(api: Api, user: string, out: SyncResult) {
-  for (const t of await invoke<Tombstone[]>("list_deletions", { user })) {
+  for (const t of await call("list_deletions", { user })) {
     const id = t.id ? fixId(t.id) : null;
     const done = await api.deleteDoc(t.kind, { id, path: t.path }, t.remote_at);
-    // Files live under the id; items from before ids existed used their path as id.
+    // Files live under the id; items from before ids existed used their path as id. A deleted document keeps its
+    // images for a while so it can be restored whole (`purgeDeletedFiles` removes them later).
     const key = id ?? t.path;
-    if (done && t.kind === "document") await api.removeDocFiles(key).catch(() => {});
     if (done && t.kind === "template") await api.removePreview("template", key).catch(() => {});
     if (!done) {
       // Normally the row changed or vanished since (an edit elsewhere wins over this delete). If it is live and
@@ -76,7 +78,7 @@ async function syncDeletions(api: Api, user: string, out: SyncResult) {
         continue;
       }
     }
-    await invoke("clear_deletion", { user, kind: t.kind, path: t.path, id: t.id ?? null });
+    await call("clear_deletion", { user, kind: t.kind, path: t.path, id: t.id ?? null });
   }
 }
 
@@ -107,7 +109,7 @@ async function syncKind(api: Api, user: string, kind: DocKind, out: SyncResult):
   for (const l of items) {
     if (l.id && l.id !== fixId(l.id)) {
       l.id = fixId(l.id);
-      await invoke("set_item_id", { user, kind, path: l.path, id: l.id });
+      await call("set_item_id", { user, kind, path: l.path, id: l.id });
     }
   }
   // Give every local item its identity.
@@ -124,7 +126,7 @@ async function syncKind(api: Api, user: string, kind: DocKind, out: SyncResult):
     if (hit && claimed.has(hit.id)) hit = undefined; // that row already belongs to another local item (renamed here)
     l.id = hit ? hit.id : newId();
     claimed.add(l.id);
-    await invoke("set_item_id", { user, kind, path: l.path, id: l.id });
+    await call("set_item_id", { user, kind, path: l.path, id: l.id });
   }
   const local = new Map(items.map((d) => [d.id!, d]));
   const localByPath = new Map(items.map((d) => [d.path, d]));
@@ -132,7 +134,7 @@ async function syncKind(api: Api, user: string, kind: DocKind, out: SyncResult):
 
   const rename = async (l: LocalDoc, to: string) => {
     const from = l.path;
-    await invoke("rename_local", { user, kind, from, to });
+    await call("rename_local", { user, kind, from, to });
     out.renamed.push({ kind, from, to });
     localByPath.delete(from);
     localByPath.set(to, l);
@@ -141,7 +143,7 @@ async function syncKind(api: Api, user: string, kind: DocKind, out: SyncResult):
 
   const pull = async (id: string, asPath: string, dirty = false) => {
     const doc = await api.getDoc(kind, id);
-    await invoke("apply_remote", {
+    await call("apply_remote", {
       user, kind, path: asPath, source: doc.source, remoteAt: dirty ? null : doc.updated_at, dirty,
       id: dirty ? null : doc.id, remotePath: dirty ? null : doc.path,
     });
@@ -159,7 +161,7 @@ async function syncKind(api: Api, user: string, kind: DocKind, out: SyncResult):
         ? await api.insertDoc(kind, l.id!, l.path, source)
         : await api.updateDoc(kind, l.id!, { path: l.path, source }, baseAt, undelete);
     if (at === null) return; // lost a race; the next pass will see the new server state
-    const kept = await invoke<boolean>("mark_synced", { user, kind, path: l.path, pushed: source, remoteAt: at, id: l.id });
+    const kept = await call("mark_synced", { user, kind, path: l.path, pushed: source, remoteAt: at, id: l.id! });
     if (kept === false) {
       // Deleted here while the push was on its way: the row just written must not outlive it.
       await api.deleteDoc(kind, { id: l.id, path: l.path }, at);
@@ -211,7 +213,7 @@ async function syncKind(api: Api, user: string, kind: DocKind, out: SyncResult):
         // heard back. If the content matches, there is nothing to reconcile.
         const source = await readLocal(user, kind, l.path);
         if ((await api.getDoc(kind, id)).source === source) {
-          await invoke("mark_synced", { user, kind, path: l.path, pushed: source, remoteAt: r.updated_at, id });
+          await call("mark_synced", { user, kind, path: l.path, pushed: source, remoteAt: r.updated_at, id });
           return;
         }
       }
@@ -241,7 +243,7 @@ async function syncKind(api: Api, user: string, kind: DocKind, out: SyncResult):
   // Deepest first, so a folder is only considered once the items inside it are gone.
   return async () => {
     for (const path of removals.sort((a, b) => depth(b) - depth(a))) {
-      await invoke("remove_local", { user, kind, path });
+      await call("remove_local", { user, kind, path });
       out.removed.push(path);
     }
   };
@@ -282,23 +284,25 @@ async function syncPreviews(api: Api, user: string) {
   await syncPreviewKind(api, user, "template");
 }
 
+/** Uploads images the server lacks and downloads ones this device lacks, then records that they are in step. */
 async function syncImages(api: Api, user: string, path: string, id: string) {
   const [remote, local] = await Promise.all([
     api.listDocImages(id),
-    invoke<string[]>("list_images", { user, path }),
+    call("list_images", { user, path }),
   ]);
   for (const name of local) {
     if (remote.includes(name)) continue;
-    const bytes = new Uint8Array(await invoke<ArrayBuffer>("read_image", { user, path, name }));
+    const bytes = new Uint8Array(await call("read_image", { user, path, name }));
     await api.uploadDocImage(id, name, bytes);
   }
   for (const name of remote) {
     if (local.includes(name) || name.startsWith(".")) continue;
     const bytes = await api.downloadDocImage(id, name);
     await invoke("save_image", bytes, {
-      headers: { "x-user": user, "x-path": encodeURIComponent(path), "x-name": name },
+      headers: { "x-user": user, "x-path": encodeURIComponent(path), "x-name": name, "x-remote": "1" },
     });
   }
+  await call("mark_images_synced", { user, path, names: [...new Set([...remote, ...local])] });
 }
 
 let running = false;
@@ -320,11 +324,20 @@ export async function runSync(api: Api, user: string, current: string | null): P
     await removeFolders();
     for (const p of out.pulled) out.touched.add(p);
     if (current) out.touched.add(current);
-    // Images are keyed by the document's id; paths may have changed during this pass.
-    const ids = new Map((await invoke<LocalDoc[]>("list_documents", { user })).map((d) => [d.path, d.id]));
-    for (const p of out.touched) {
-      const id = ids.get(p);
-      if (id && !out.removed.includes(p)) await syncImages(api, user, p, id);
+    // Images are keyed by the document's id; paths may have changed during this pass. Besides the documents this
+    // pass touched, every document whose images are not known to be in step is done (an image added to a document
+    // that is not open, or an upload or download that failed last time), so the server ends up with a complete copy.
+    let failures = 0;
+    for (const d of await call("list_documents", { user })) {
+      const due = out.touched.has(d.path) || (d.images_synced === false && d.remote_at !== null);
+      if (!d.id || !due || out.removed.includes(d.path)) continue;
+      try {
+        await syncImages(api, user, d.path, d.id);
+      } catch (e) {
+        out.errors.push(`images of ${JSON.stringify(d.path)}: ${(e as Error)?.message ?? e}`);
+        // Most likely the connection went; the rest stay marked and are retried on the next pass.
+        if (++failures >= 2) break;
+      }
     }
     await syncPreviews(api, user).catch((e) => console.warn("preview sync failed", e));
     return out;

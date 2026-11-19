@@ -26,6 +26,9 @@ class Server {
   templates = new Map<string, Row>();
   files = new Map<string, string>(); // storage: "<id>/images/<name>" -> content
   uploads: string[] = [];
+  /** The next this-many image uploads / downloads fail, as on a dropped connection. */
+  failUploads = 0;
+  failDownloads = 0;
 
   private tick = () => `v${String(++this.n).padStart(4, "0")}`;
   private table = (kind: string) => (kind === "template" ? this.templates : this.docs);
@@ -38,6 +41,12 @@ class Server {
   }
   row(kind: string, path: string) {
     return [...this.table(kind).values()].find((r) => r.path === path && !r.deleted_at);
+  }
+  /** What `restoreDoc` in @texture/api does: clears the deletion marker, which moves the version. */
+  undelete(id: string) {
+    const r = this.docs.get(id)!;
+    r.deleted_at = null;
+    r.updated_at = this.tick();
   }
   private dup() {
     return Object.assign(new Error("duplicate key"), { code: "23505" });
@@ -98,10 +107,14 @@ class Server {
     listDocImages: async (id: string) =>
       [...this.files.keys()].filter((k) => k.startsWith(`${id}/images/`)).map((k) => k.split("/").pop()!),
     uploadDocImage: async (id: string, name: string, bytes: Uint8Array) => {
+      if (this.failUploads-- > 0) throw new Error("upload failed");
       this.uploads.push(`${id}/${name}`);
       this.files.set(`${id}/images/${name}`, new TextDecoder().decode(bytes));
     },
-    downloadDocImage: async (id: string, name: string) => new TextEncoder().encode(this.files.get(`${id}/images/${name}`) ?? ""),
+    downloadDocImage: async (id: string, name: string) => {
+      if (this.failDownloads-- > 0) throw new Error("download failed");
+      return new TextEncoder().encode(this.files.get(`${id}/images/${name}`) ?? "");
+    },
   };
 }
 
@@ -109,7 +122,8 @@ class Server {
 
 type Meta = { dirty: boolean; remote_at: string | null; id: string | null; remote_path: string | null };
 const blank = (): Meta => ({ dirty: false, remote_at: null, id: null, remote_path: null });
-type Item = { kind: "document" | "folder"; source: string; images: Map<string, string>; meta: Meta };
+/** `imagesSynced` mirrors Meta.images_synced in lib.rs (kept apart here because the fake replaces `meta` wholesale). */
+type Item = { kind: "document" | "folder"; source: string; images: Map<string, string>; meta: Meta; imagesSynced?: boolean };
 type Tomb = { kind: string; path: string; id: string | null; remote_at: string };
 
 const parentsOf = (p: string) => p.split("/").slice(0, -1).map((_, i, a) => a.slice(0, i + 1).join("/"));
@@ -132,6 +146,23 @@ class Device {
   createFolder(path: string) {
     this.ensureParents(path);
     if (!this.items.has(path)) this.items.set(path, { kind: "folder", source: "", images: new Map(), meta: blank() });
+  }
+  /** Inserting a photo: the file lands in images/ (save_image without x-remote). */
+  addImage(path: string, name: string, content: string) {
+    const it = this.items.get(path)!;
+    it.images.set(name, content);
+    it.imagesSynced = false;
+  }
+  /** lib.rs `check_case`: a new path may not differ from an existing one (or its folders) only by capitals. */
+  private checkCase(path: string, moving?: string) {
+    const segs = path.split("/");
+    for (let i = 1; i <= segs.length; i++) {
+      const prefix = segs.slice(0, i).join("/");
+      if (this.items.has(prefix)) continue;
+      const other = [...this.items.keys()].find((p) => p.split("/").length === i && p.toLowerCase() === prefix.toLowerCase());
+      if (other && other !== moving) throw new Error(`${path} and ${other} differ only by capital letters`);
+      return;
+    }
   }
   edit(path: string, source: string) {
     const it = this.items.get(path)!;
@@ -178,7 +209,10 @@ class Device {
 
   // ---- the Tauri commands sync.ts calls ----
   call(cmd: string, a: any = {}, opts?: any): unknown {
-    const info = (path: string, it: Item) => ({ path, ...it.meta, has_preview: false, preview_dirty: false, preview_at: null });
+    const info = (path: string, it: Item) => ({
+      path, ...it.meta, has_preview: false, preview_dirty: false, preview_at: null,
+      images_synced: it.imagesSynced === true, has_images: it.images.size > 0,
+    });
     const sameTomb = (t: Tomb, kind: string, path: string, id: string | null) =>
       t.kind === kind && (t.id && id ? t.id === id : t.path === path);
     switch (cmd) {
@@ -211,6 +245,7 @@ class Device {
         if (a.kind === "template") {
           this.templates.set(a.path, { source: a.source, meta });
         } else {
+          this.checkCase(a.path);
           this.ensureParents(a.path);
           const old = this.items.get(a.path);
           this.items.set(a.path, { kind: a.kind, source: a.kind === "folder" ? "" : a.source, images: old?.images ?? new Map(), meta });
@@ -240,7 +275,14 @@ class Device {
       case "save_image": {
         const path = decodeURIComponent(opts.headers["x-path"]);
         this.downloads.push(`${path}/${opts.headers["x-name"]}`);
-        this.items.get(path)!.images.set(opts.headers["x-name"], new TextDecoder().decode(a));
+        const it = this.items.get(path)!;
+        it.images.set(opts.headers["x-name"], new TextDecoder().decode(a));
+        if (!opts.headers["x-remote"]) it.imagesSynced = false;
+        return;
+      }
+      case "mark_images_synced": {
+        const it = this.items.get(a.path)!;
+        if ([...it.images.keys()].every((n) => a.names.includes(n))) it.imagesSynced = true;
         return;
       }
       default:
@@ -260,6 +302,7 @@ class Device {
     }
     if (!this.items.has(from) && this.items.has(to)) return; // moved along with a parent
     if (!this.items.has(from)) throw new Error("not found");
+    this.checkCase(to, from);
     this.ensureParents(to);
     for (const [p, it] of [...this.items]) {
       if (!under(p, from)) continue;
@@ -795,5 +838,111 @@ describe("an interrupted first push", () => {
     expect(res.errors).toEqual([]);
     expect(res.conflicts).toEqual([]); // no "(conflict)" copy of itself
     expect(server.live("document")).toHaveLength(1);
+  });
+});
+
+describe("the server ends up with a complete copy", () => {
+  it("retries an image upload that failed, even though nothing else about the document changes", async () => {
+    A.createDoc("HW", "x", { "a.png": "A", "b.png": "B" });
+    server.failUploads = 1;
+    const first = await sync(A);
+    expect(first.errors.join()).toContain('images of "HW"');
+    expect(A.doc("HW")?.imagesSynced).not.toBe(true);
+
+    const second = await sync(A); // the document itself is clean now
+    expect(second.errors).toEqual([]);
+    const id = A.doc("HW")!.meta.id;
+    expect(server.files.get(`${id}/images/a.png`)).toBe("A");
+    expect(server.files.get(`${id}/images/b.png`)).toBe("B");
+    expect(A.doc("HW")?.imagesSynced).toBe(true);
+  });
+
+  it("uploads an image added to a document whose text did not change", async () => {
+    A.createDoc("HW", "x");
+    await sync(A);
+    A.addImage("HW", "late.png", "L");
+    await sync(A);
+    expect(server.files.get(`${A.doc("HW")!.meta.id}/images/late.png`)).toBe("L");
+  });
+
+  it("retries an image download that failed on the device being restored", async () => {
+    A.createDoc("HW", "x", { "a.png": "A" });
+    await sync(A);
+    server.failDownloads = 1;
+    const first = await sync(B);
+    expect(first.errors.join()).toContain('images of "HW"');
+    expect(B.doc("HW")?.images.has("a.png")).toBe(false);
+
+    await sync(B);
+    expect(B.doc("HW")?.images.get("a.png")).toBe("A");
+    expect(B.doc("HW")?.imagesSynced).toBe(true);
+  });
+
+  it("checks documents from before images were tracked once, then leaves them alone", async () => {
+    A.createDoc("HW", "x", { "a.png": "A" });
+    await sync(A);
+    const id = A.doc("HW")!.meta.id;
+    // as left behind by an older version: the upload never happened and nothing is marked
+    server.files.delete(`${id}/images/a.png`);
+    A.doc("HW")!.imagesSynced = undefined;
+    await sync(A);
+    expect(server.files.get(`${id}/images/a.png`)).toBe("A");
+    const uploads = server.uploads.length;
+    await sync(A);
+    expect(server.uploads.length).toBe(uploads);
+  });
+
+  it("gives up on images after repeated failures in one pass and picks them up on the next", async () => {
+    for (const n of ["1", "2", "3"]) A.createDoc(`HW ${n}`, "x", { "a.png": n });
+    server.failUploads = 5;
+    const res = await sync(A);
+    expect(res.errors.filter((e) => e.startsWith("images of"))).toHaveLength(2);
+    server.failUploads = 0;
+    await sync(A);
+    for (const n of ["1", "2", "3"]) expect(server.files.get(`${A.doc(`HW ${n}`)!.meta.id}/images/a.png`)).toBe(n);
+  });
+});
+
+describe("names that differ only by capitals", () => {
+  it("never lets one document overwrite the other on a device being restored", async () => {
+    // An account from before the rule (or made on Linux by an older version) holds both.
+    A.createDoc("HW", "upper");
+    A.createDoc("hw", "lower");
+    await sync(A);
+    expect(server.live("document")).toHaveLength(2);
+
+    const res = await sync(B);
+    expect(res.errors).toHaveLength(1);
+    expect(res.errors[0]).toContain("capital letters");
+    expect(B.paths("document")).toHaveLength(1);
+    const kept = B.paths("document")[0];
+    expect(B.doc(kept)?.source).toBe(kept === "HW" ? "upper" : "lower");
+
+    // Renaming one of them (on any device) resolves it.
+    A.moveItem("hw", "hw old");
+    await sync(A);
+    const again = await sync(B);
+    expect(again.errors).toEqual([]);
+    expect(B.doc("HW")?.source).toBe("upper");
+    expect(B.doc("hw old")?.source).toBe("lower");
+  });
+});
+
+describe("restoring a deleted document", () => {
+  it("comes back whole, images included, once its deletion marker is cleared on the server", async () => {
+    A.createDoc("Physics/HW", "body", { "a.png": "A" });
+    await sync(A);
+    const id = A.doc("Physics/HW")!.meta.id!;
+    A.deleteItem("Physics/HW");
+    await sync(A);
+    expect(server.live("document")).toEqual([]);
+    expect(server.files.get(`${id}/images/a.png`)).toBe("A"); // kept so a restore is complete
+
+    server.undelete(id);
+    const res = await sync(A);
+    expect(res.errors).toEqual([]);
+    expect(A.doc("Physics/HW")?.source).toBe("body");
+    expect(A.doc("Physics/HW")?.images.get("a.png")).toBe("A");
+    expect(A.doc("Physics/HW")?.meta.id).toBe(id);
   });
 });

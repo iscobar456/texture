@@ -1,4 +1,4 @@
-import { invoke } from "@tauri-apps/api/core";
+import { call } from "./commands";
 import type { Text } from "@codemirror/state";
 
 // LaTeX formatting is done by the `tex-fmt` crate on the Rust side (`format_tex` in lib.rs). This file asks for
@@ -65,7 +65,7 @@ export async function formatDoc(doc: Text, opts: FormatOptions): Promise<DocForm
   const before = doc.toString();
   let after: string;
   try {
-    after = await invoke<string>("format_tex", { text: before, wrap: opts.wrap, wraplen: opts.wrapLen, indent: opts.indent });
+    after = await call("format_tex", { text: before, wrap: opts.wrap, wraplen: opts.wrapLen, indent: opts.indent });
   } catch (e) {
     return { ok: false, error: String(e) };
   }

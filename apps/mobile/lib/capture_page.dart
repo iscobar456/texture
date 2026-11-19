@@ -19,11 +19,15 @@ class _Upload {
     this.state = _State.uploading,
     this.id,
     this.delivered = false,
+    this.storagePath,
   });
   final XFile file;
   _State state;
   String? error;
   String? id; // the photos row, once inserted
+  /// Where the file goes in storage, fixed on the first attempt so a retry
+  /// overwrites that upload instead of leaving an orphan beside a second copy.
+  String? storagePath;
   bool delivered; // the desktop has shown it in its inbox
 
   Map<String, dynamic> toJson() => {
@@ -31,6 +35,7 @@ class _Upload {
     'state': state.name,
     'id': id,
     'delivered': delivered,
+    'storagePath': storagePath,
   };
 }
 
@@ -64,6 +69,7 @@ class _History {
               state: m['state'] == 'sent' ? _State.sent : _State.failed,
               id: m['id'] as String?,
               delivered: m['delivered'] == true,
+              storagePath: m['storagePath'] as String?,
             ),
       ];
     } catch (_) {
@@ -219,8 +225,16 @@ class _CapturePageState extends State<CapturePage>
     try {
       final uid = sb.auth.currentUser!.id;
       final ext = u.file.path.split('.').last;
-      final path = '$uid/${DateTime.now().microsecondsSinceEpoch}.$ext';
-      await sb.storage.from('photos').upload(path, File(u.file.path));
+      final path = u.storagePath ??=
+          '$uid/${DateTime.now().microsecondsSinceEpoch}.$ext';
+      _persist();
+      await sb.storage
+          .from('photos')
+          .upload(
+            path,
+            File(u.file.path),
+            fileOptions: const FileOptions(upsert: true),
+          );
       final row = await sb
           .from('photos')
           .insert({'storage_path': path})

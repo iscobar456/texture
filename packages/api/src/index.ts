@@ -27,6 +27,20 @@ export type DocKind = "document" | "folder" | "template" | "config";
  * Config files have no ids; their id is their path.
  */
 export type RemoteDoc = { id: string; path: string; updated_at: string; deleted_at: string | null; preview_at?: string | null };
+/** A document that was deleted and can still be brought back. */
+export type DeletedDoc = { id: string; path: string; deleted_at: string };
+/** How long a deleted document stays restorable; its images are removed from storage after that. */
+export const DELETED_KEEP_DAYS = 30;
+
+/** "<path><suffix>", with the last name shortened so it still fits the 64-byte limit on names. */
+export function withSuffix(path: string, suffix: string): string {
+  const cut = path.lastIndexOf("/") + 1;
+  let name = path.slice(cut);
+  const bytes = (s: string) => new TextEncoder().encode(s).length;
+  while (name && bytes(name) + bytes(suffix) > 64) name = name.slice(0, -1);
+  return path.slice(0, cut) + name.trimEnd() + suffix;
+}
+
 /** The column that identifies a row of this kind. */
 const idCol = (k: DocKind) => (k === "config" ? "path" : "id");
 const table = (k: DocKind) => (k === "template" ? "templates" : k === "config" ? "user_files" : "documents");
@@ -41,24 +55,71 @@ const RESPONSE_TIMEOUT_MS = 20_000;
  * connection without ever settling; since the auth client serializes token refreshes, one such request (typically the
  * refresh due after a long break) would stall every later call. The limit covers only the wait for the response
  * headers, not reading the body, so a large photo download on a slow link is not cut off part way.
+ *
+ * Fetch implementations do not reliably pass the abort reason on (WebKitGTK rejects with a bare "AbortError: Fetch is
+ * aborted"), so a request this limit cut off is always reported as a `TimeoutError` here.
  */
-const fetchWithTimeout: typeof fetch = (input, init) => {
+export const withTimeout = (base: typeof fetch, ms = RESPONSE_TIMEOUT_MS): typeof fetch => (input, init) => {
   const ctl = new AbortController();
-  const timer = setTimeout(() => ctl.abort(new DOMException("The server did not respond in time", "TimeoutError")), RESPONSE_TIMEOUT_MS);
+  let timedOut = false;
+  const timer = setTimeout(() => {
+    timedOut = true;
+    ctl.abort(new DOMException("The server did not respond in time", "TimeoutError"));
+  }, ms);
   const outer = init?.signal;
   if (outer) {
     if (outer.aborted) ctl.abort(outer.reason);
     else outer.addEventListener("abort", () => ctl.abort(outer.reason), { once: true });
   }
-  return fetch(input, { ...init, signal: ctl.signal }).finally(() => clearTimeout(timer));
+  return base(input, { ...init, signal: ctl.signal })
+    .catch((e: unknown) => {
+      if (timedOut) throw new DOMException(`The server did not respond within ${Math.round(ms / 1000)}s`, "TimeoutError");
+      throw e;
+    })
+    .finally(() => clearTimeout(timer));
 };
 
-export function createApi(url: string, anonKey: string) {
-  const sb: SupabaseClient = createClient(url, anonKey, { global: { fetch: fetchWithTimeout } });
+export type ApiOptions = {
+  /**
+   * The HTTP transport. Defaults to the global `fetch`. The desktop passes one that runs in Rust, because the webview's
+   * own network stack keeps reusing a connection that died during a sleep until the kernel gives up on it.
+   */
+  fetch?: typeof fetch;
+};
+
+/**
+ * Reads a whole listing page by page. The server returns at most 1000 table rows (100 storage entries) per request
+ * and gives no sign that it cut the answer short, which would make sync treat the missing items as absent.
+ * `page(from, to)` fetches rows `from..=to` of a stably ordered query.
+ */
+export async function fetchAll<T>(
+  page: (from: number, to: number) => PromiseLike<{ data: T[] | null; error: unknown }>,
+  size = 1000,
+): Promise<T[]> {
+  const out: T[] = [];
+  for (let from = 0; ; from += size) {
+    const { data, error } = await page(from, from + size - 1);
+    if (error) throw error;
+    out.push(...(data ?? []));
+    if (!data || data.length < size) return out;
+  }
+}
+
+export function createApi(url: string, anonKey: string, opts: ApiOptions = {}) {
+  const base = opts.fetch ?? ((input, init) => fetch(input, init));
+  const sb: SupabaseClient = createClient(url, anonKey, { global: { fetch: withTimeout(base) } });
   /** "<uid>/<id>/preview.png", or "<uid>/.templates/<id>/preview.png" (ids never start with '.'). */
   const previewKey = async (kind: "document" | "template", id: string) => {
     const uid = (await sb.auth.getSession()).data.session?.user.id;
     return `${uid}/${kind === "template" ? `.templates/${id}` : id}/preview.png`;
+  };
+  /** Every file name in a storage folder (the listing is paged, 100 at a time). */
+  const imageNames = async (folder: string): Promise<string[]> => {
+    const files = await fetchAll<{ name: string }>(
+      (from) => sb.storage.from(FILES_BUCKET).list(folder, { limit: 100, offset: from, sortBy: { column: "name", order: "asc" } }),
+      100,
+    );
+    return files.map((f) => f.name);
   };
   return {
     sb,
@@ -152,11 +213,11 @@ export function createApi(url: string, anonKey: string) {
     /** Includes soft-deleted rows: a tombstone is how this device learns of a deletion. */
     async listDocs(kind: DocKind): Promise<RemoteDoc[]> {
       const cols = kind === "config" ? "path, updated_at, deleted_at" : "id, path, updated_at, deleted_at, preview_at";
-      let q = sb.from(table(kind)).select(cols);
-      if (isDocTable(kind)) q = q.eq("kind", kind);
-      const { data, error } = await q;
-      if (error) throw error;
-      const rows = data as unknown as RemoteDoc[];
+      const rows = await fetchAll<RemoteDoc>((from, to) => {
+        let q = sb.from(table(kind)).select(cols);
+        if (isDocTable(kind)) q = q.eq("kind", kind);
+        return q.order(idCol(kind)).range(from, to) as unknown as PromiseLike<{ data: RemoteDoc[] | null; error: unknown }>;
+      });
       return kind === "config" ? rows.map((r) => ({ ...r, id: r.path })) : rows;
     },
     async getDoc(kind: DocKind, id: string): Promise<RemoteDoc & { source: string }> {
@@ -210,6 +271,59 @@ export function createApi(url: string, anonKey: string) {
       }
       return false;
     },
+    /** Documents deleted within the last DELETED_KEEP_DAYS, most recent first. */
+    async listDeletedDocs(): Promise<DeletedDoc[]> {
+      const cutoff = new Date(Date.now() - DELETED_KEEP_DAYS * 86_400_000).toISOString();
+      const { data, error } = await sb
+        .from("documents")
+        .select("id, path, deleted_at")
+        .eq("kind", "document")
+        .gte("deleted_at", cutoff)
+        .order("deleted_at", { ascending: false })
+        .limit(200);
+      if (error) throw error;
+      return data as DeletedDoc[];
+    },
+    /**
+     * Brings a deleted document back by clearing its deletion marker; the next sync pulls it (text and images)
+     * like any document made on another device. If its old name has been taken since, it returns as
+     * "<name> (restored)". Resolves to the path it now has, or null if it is no longer there to restore.
+     */
+    async restoreDoc(d: DeletedDoc): Promise<string | null> {
+      const names = [d.path, withSuffix(d.path, " (restored)"), ...[2, 3, 4, 5].map((n) => withSuffix(d.path, ` (restored ${n})`))];
+      for (const path of names) {
+        const { data, error } = await sb
+          .from("documents")
+          .update({ deleted_at: null, path })
+          .eq("id", d.id)
+          .not("deleted_at", "is", null)
+          .select("path");
+        if (error) {
+          if (error.code === "23505") continue; // a live document already has that name
+          throw error;
+        }
+        return data.length ? path : null;
+      }
+      throw new Error(`Every name tried for "${d.path}" is taken; rename the existing document first.`);
+    },
+    /**
+     * Removes the stored images and preview of documents whose restore window has passed. Only looks at ones that
+     * left the window in the last `DELETED_KEEP_DAYS`, so the work per launch stays small; the rows themselves
+     * stay (they are how other devices learn of a deletion). Returns how many were cleaned up.
+     */
+    async purgeDeletedFiles(): Promise<number> {
+      const day = 86_400_000;
+      const { data, error } = await sb
+        .from("documents")
+        .select("id")
+        .eq("kind", "document")
+        .lt("deleted_at", new Date(Date.now() - DELETED_KEEP_DAYS * day).toISOString())
+        .gte("deleted_at", new Date(Date.now() - 2 * DELETED_KEEP_DAYS * day).toISOString())
+        .limit(200);
+      if (error) throw error;
+      for (const r of data as { id: string }[]) await this.removeDocFiles(r.id);
+      return data.length;
+    },
     async setPreviewAt(kind: "document" | "template", id: string, marker: string): Promise<boolean> {
       const { data, error } = await sb.from(table(kind)).update({ preview_at: marker }).eq("id", id).is("deleted_at", null).select("id");
       if (error) throw error;
@@ -231,15 +345,13 @@ export function createApi(url: string, anonKey: string) {
     /** Best-effort cleanup of a deleted document's images and preview. */
     async removeDocFiles(id: string) {
       const uid = (await sb.auth.getSession()).data.session?.user.id;
-      const images = await sb.storage.from(FILES_BUCKET).list(`${uid}/${id}/images`);
-      const names = (images.data ?? []).map((f) => `${uid}/${id}/images/${f.name}`);
+      const images = await imageNames(`${uid}/${id}/images`).catch(() => [] as string[]);
+      const names = images.map((n) => `${uid}/${id}/images/${n}`);
       await sb.storage.from(FILES_BUCKET).remove([...names, `${uid}/${id}/preview.png`]);
     },
     async listDocImages(id: string): Promise<string[]> {
       const uid = (await sb.auth.getSession()).data.session?.user.id;
-      const { data, error } = await sb.storage.from(FILES_BUCKET).list(`${uid}/${id}/images`);
-      if (error) throw error;
-      return data.map((f) => f.name);
+      return imageNames(`${uid}/${id}/images`);
     },
     async uploadDocImage(id: string, name: string, bytes: Uint8Array) {
       const uid = (await sb.auth.getSession()).data.session?.user.id;

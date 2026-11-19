@@ -1,8 +1,12 @@
+mod compile;
+mod format;
 mod latex;
+mod ocr;
 
+use std::cell::Cell;
 use std::fs;
 use std::path::PathBuf;
-use std::process::Command;
+use std::sync::{Mutex, MutexGuard};
 
 use serde::{Deserialize, Serialize};
 use tauri::ipc::{InvokeBody, Request, Response};
@@ -33,6 +37,10 @@ struct Meta {
     preview_at: Option<String>,
     /// preview.png was rendered here and not uploaded yet.
     preview_dirty: bool,
+    /// The images/ folder is known to match the server. Cleared whenever an image is added here or the text is
+    /// replaced by a pull; set again once a sync has uploaded and downloaded everything. Absent (false) on
+    /// documents from before this existed, so each of those is checked once.
+    images_synced: bool,
 }
 
 /// A deletion not yet applied on the server. `remote_at` is the version that was deleted.
@@ -58,6 +66,9 @@ struct DocInfo {
     has_preview: bool,
     preview_at: Option<String>,
     preview_dirty: bool,
+    images_synced: bool,
+    /// The document has at least one image file.
+    has_images: bool,
 }
 
 #[derive(Serialize)]
@@ -114,6 +125,34 @@ fn valid_user(user: &str) -> Result<&str, String> {
     if ok { Ok(user) } else { Err("invalid user id".into()) }
 }
 
+/// File commands run off the main thread (`#[tauri::command(async)]`), so the window never waits on the disk.
+/// They used to be serialized by running on that one thread, and several of them read state, decide and write
+/// (`mark_synced` vs `save_source` on the same `.sync.json`, the tombstone list), so each still takes this lock
+/// for its whole body. It is re-entrant per thread because commands call each other (`read_template`).
+static FS: Mutex<()> = Mutex::new(());
+thread_local! {
+    static FS_HELD: Cell<bool> = const { Cell::new(false) };
+}
+
+struct FsGuard(Option<MutexGuard<'static, ()>>);
+
+impl Drop for FsGuard {
+    fn drop(&mut self) {
+        if self.0.is_some() {
+            FS_HELD.with(|h| h.set(false));
+        }
+    }
+}
+
+fn fs_lock() -> FsGuard {
+    if FS_HELD.with(|h| h.get()) {
+        return FsGuard(None);
+    }
+    let guard = FS.lock().unwrap_or_else(|e| e.into_inner());
+    FS_HELD.with(|h| h.set(true));
+    FsGuard(Some(guard))
+}
+
 /// Writes via a temp file and rename, so a crash never leaves a half-written file behind.
 /// The temp name starts with '.', which every directory listing here already ignores.
 fn write_atomic(path: impl AsRef<std::path::Path>, data: impl AsRef<[u8]>) -> Result<(), String> {
@@ -148,6 +187,76 @@ fn templates_dir(app: &tauri::AppHandle, user: &str) -> Result<PathBuf, String> 
 /// A directory is a document iff it holds main.tex; anything else under the user dir is a folder.
 fn is_document(dir: &std::path::Path) -> bool {
     dir.join("main.tex").is_file()
+}
+
+/// The image files of the document in `dir` (temp and hidden files are not images).
+fn image_names(dir: &std::path::Path) -> Vec<String> {
+    let Ok(entries) = fs::read_dir(dir.join("images")) else { return vec![] };
+    entries
+        .flatten()
+        .map(|e| e.file_name().to_string_lossy().to_string())
+        .filter(|n| !n.starts_with('.'))
+        .collect()
+}
+
+/// "HW" and "hw" are one name on macOS and Windows but two on Linux, so an account holding both cannot be
+/// restored on every computer. Walks `segs` down from `root`; where a segment does not exist exactly but an
+/// entry differing only by capitals does, returns that existing item's path. None means `segs` is safe to create.
+fn case_clash(root: &std::path::Path, segs: &[&str]) -> Option<String> {
+    let mut dir = root.to_path_buf();
+    for (i, seg) in segs.iter().enumerate() {
+        let names: Vec<String> = fs::read_dir(&dir)
+            .ok()?
+            .flatten()
+            .map(|e| e.file_name().to_string_lossy().to_string())
+            .collect();
+        if names.iter().any(|n| n == seg) {
+            dir.push(seg);
+            continue;
+        }
+        let lower = seg.to_lowercase();
+        return names.iter().find(|n| !n.starts_with('.') && n.to_lowercase() == lower).map(|n| {
+            let mut p: Vec<&str> = segs[..i].to_vec();
+            p.push(n);
+            p.join("/")
+        });
+    }
+    None
+}
+
+fn case_error(new: &str, existing: &str) -> String {
+    format!("{new:?} and {existing:?} differ only by capital letters, which does not work on every computer. Rename one of them.")
+}
+
+/// Refuses a document/folder path that clashes by capitals with an existing one. `moving` is the item being
+/// renamed, which may of course clash with itself ("hw" -> "HW").
+fn check_case(app: &tauri::AppHandle, user: &str, path: &str, moving: Option<&str>) -> Result<(), String> {
+    match case_clash(&user_dir(app, user)?, &segments(path)?) {
+        Some(other) if Some(other.as_str()) != moving => Err(case_error(path, &other)),
+        _ => Ok(()),
+    }
+}
+
+/// The same rule for templates, which are `<name>.tex` files in one folder.
+fn template_case_clash(dir: &std::path::Path, name: &str) -> Option<String> {
+    let names: Vec<String> = fs::read_dir(dir)
+        .ok()?
+        .flatten()
+        .filter_map(|e| e.file_name().to_string_lossy().strip_suffix(".tex").map(str::to_string))
+        .filter(|n| !n.starts_with('.'))
+        .collect();
+    if names.iter().any(|n| n == name) {
+        return None;
+    }
+    let lower = name.to_lowercase();
+    names.into_iter().find(|n| n.to_lowercase() == lower)
+}
+
+fn check_template_case(app: &tauri::AppHandle, user: &str, name: &str, moving: Option<&str>) -> Result<(), String> {
+    match template_case_clash(&templates_dir(app, user)?, name) {
+        Some(other) if Some(other.as_str()) != moving => Err(case_error(name, &other)),
+        _ => Ok(()),
+    }
 }
 
 /// Location of a document or folder. Never creates anything.
@@ -237,6 +346,16 @@ fn builtin(name: &str) -> Option<&'static str> {
     BUILTIN_TEMPLATES.iter().find(|(n, _)| *n == name).map(|(_, b)| *b)
 }
 
+/// The first `max` bytes of a file as text; listings only need the start of each document.
+fn read_head(path: &std::path::Path, max: u64) -> String {
+    use std::io::Read;
+    let mut buf = Vec::new();
+    if let Ok(f) = fs::File::open(path) {
+        let _ = f.take(max).read_to_end(&mut buf);
+    }
+    String::from_utf8_lossy(&buf).into_owned()
+}
+
 fn snippet(source: &str) -> String {
     let body = source.split_once("\\begin{document}").map_or(source, |(_, b)| b);
     body.trim().chars().take(240).collect()
@@ -255,7 +374,7 @@ fn walk(dir: &std::path::Path, prefix: &str, docs: &mut Vec<DocInfo>, folders: &
         if is_document(&p) {
             let meta = read_meta(&p.join(".sync.json"));
             docs.push(DocInfo {
-                snippet: snippet(&fs::read_to_string(p.join("main.tex")).unwrap_or_default()),
+                snippet: snippet(&read_head(&p.join("main.tex"), 16 * 1024)),
                 has_preview: p.join("preview.png").is_file(),
                 path,
                 dirty: meta.dirty,
@@ -264,6 +383,8 @@ fn walk(dir: &std::path::Path, prefix: &str, docs: &mut Vec<DocInfo>, folders: &
                 remote_path: meta.remote_path,
                 preview_at: meta.preview_at,
                 preview_dirty: meta.preview_dirty,
+                images_synced: meta.images_synced,
+                has_images: !image_names(&p).is_empty(),
             });
         } else {
             let meta = read_meta(&p.join(".sync.json"));
@@ -301,8 +422,9 @@ struct ConfigInfo {
     remote_at: Option<String>,
 }
 
-#[tauri::command]
+#[tauri::command(async)]
 fn list_configs(app: tauri::AppHandle, user: String) -> Result<Vec<ConfigInfo>, String> {
+    let _fs = fs_lock();
     let mut out = vec![];
     for name in CONFIG_NAMES {
         let (file, meta_path) = config_paths(&app, &user, name)?;
@@ -315,8 +437,9 @@ fn list_configs(app: tauri::AppHandle, user: String) -> Result<Vec<ConfigInfo>, 
 }
 
 /// None if the file has never been created on this device.
-#[tauri::command]
+#[tauri::command(async)]
 fn load_config(app: tauri::AppHandle, user: String, name: String) -> Result<Option<String>, String> {
+    let _fs = fs_lock();
     let (file, _) = config_paths(&app, &user, &name)?;
     match fs::read_to_string(file) {
         Ok(s) => Ok(Some(s)),
@@ -325,23 +448,26 @@ fn load_config(app: tauri::AppHandle, user: String, name: String) -> Result<Opti
     }
 }
 
-#[tauri::command]
+#[tauri::command(async)]
 fn save_config(app: tauri::AppHandle, user: String, name: String, source: String) -> Result<(), String> {
+    let _fs = fs_lock();
     let (file, meta_path) = config_paths(&app, &user, &name)?;
     write_atomic(file, source)?;
     update_meta(&meta_path, |m| m.dirty = true)
 }
 
-#[tauri::command]
+#[tauri::command(async)]
 fn list_documents(app: tauri::AppHandle, user: String) -> Result<Vec<DocInfo>, String> {
+    let _fs = fs_lock();
     let (mut docs, mut folders) = (vec![], vec![]);
     walk(&user_dir(&app, &user)?, "", &mut docs, &mut folders);
     docs.sort_by_key(|d| d.path.to_lowercase());
     Ok(docs)
 }
 
-#[tauri::command]
+#[tauri::command(async)]
 fn list_folders(app: tauri::AppHandle, user: String) -> Result<Vec<FolderInfo>, String> {
+    let _fs = fs_lock();
     let (mut docs, mut folders) = (vec![], vec![]);
     walk(&user_dir(&app, &user)?, "", &mut docs, &mut folders);
     folders.sort_by_key(|f| f.path.to_lowercase());
@@ -349,12 +475,14 @@ fn list_folders(app: tauri::AppHandle, user: String) -> Result<Vec<FolderInfo>, 
 }
 
 /// Creates a folder (and any missing parents). Existing folders are fine; a document in the way is not.
-#[tauri::command]
+#[tauri::command(async)]
 fn create_folder(app: tauri::AppHandle, user: String, path: String) -> Result<(), String> {
+    let _fs = fs_lock();
     let dir = item_path(&app, &user, &path)?;
     if is_document(&dir) {
         return Err(format!("{path:?} is a document"));
     }
+    check_case(&app, &user, &path, None)?;
     fs::create_dir_all(dir).map_err(|e| e.to_string())
 }
 
@@ -378,8 +506,9 @@ fn drop_template_preview(app: &tauri::AppHandle, user: &str, name: &str) {
 }
 
 /// Raw body is a PNG of the template's first page; headers x-user and x-name (percent-encoded).
-#[tauri::command]
+#[tauri::command(async)]
 fn save_template_preview(app: tauri::AppHandle, request: Request<'_>) -> Result<(), String> {
+    let _fs = fs_lock();
     let (user, name) = (header(&request, "x-user")?, decode(&header(&request, "x-name")?));
     let InvokeBody::Raw(bytes) = request.body() else {
         return Err("expected raw body".into());
@@ -402,8 +531,9 @@ fn save_template_preview(app: tauri::AppHandle, request: Request<'_>) -> Result<
 }
 
 /// A thumbnail downloaded from the server (header x-preview-at is its marker).
-#[tauri::command]
+#[tauri::command(async)]
 fn apply_template_preview(app: tauri::AppHandle, request: Request<'_>) -> Result<(), String> {
+    let _fs = fs_lock();
     let (user, name, at) = (
         header(&request, "x-user")?,
         decode(&header(&request, "x-name")?),
@@ -424,8 +554,9 @@ fn apply_template_preview(app: tauri::AppHandle, request: Request<'_>) -> Result
 }
 
 /// Records that the local thumbnail was uploaded under marker `preview_at`.
-#[tauri::command]
+#[tauri::command(async)]
 fn mark_template_preview(app: tauri::AppHandle, user: String, name: String, preview_at: String) -> Result<(), String> {
+    let _fs = fs_lock();
     let (_, meta_path) = template_paths(&app, &user, &name)?;
     update_meta(&meta_path, |m| {
         m.preview_at = Some(preview_at);
@@ -433,22 +564,17 @@ fn mark_template_preview(app: tauri::AppHandle, user: String, name: String, prev
     })
 }
 
-#[tauri::command]
+#[tauri::command(async)]
 fn read_template_preview(app: tauri::AppHandle, user: String, name: String) -> Result<Response, String> {
+    let _fs = fs_lock();
     let bytes = fs::read(template_preview_path(&app, &user, &name)?).map_err(|e| e.to_string())?;
     Ok(Response::new(bytes))
 }
 
-/// Compiles a stored template in its own scratch folder (so it never collides with the editor's) and returns the PDF.
-#[tauri::command(async)]
-fn compile_template_preview(app: tauri::AppHandle, user: String, name: String) -> Result<Response, String> {
-    let source = read_template(app.clone(), user.clone(), name)?;
-    build_pdf(&app, &user, "", &source, Some(".scratch-thumbs")).map(Response::new)
-}
-
 /// Built-ins first, then user templates. A user template with a built-in's name replaces it.
-#[tauri::command]
+#[tauri::command(async)]
 fn list_templates(app: tauri::AppHandle, user: String) -> Result<Vec<TemplateInfo>, String> {
+    let _fs = fs_lock();
     let mut out: Vec<TemplateInfo> = fs::read_dir(templates_dir(&app, &user)?)
         .map_err(|e| e.to_string())?
         .filter_map(|e| e.ok())
@@ -490,8 +616,9 @@ fn list_templates(app: tauri::AppHandle, user: String) -> Result<Vec<TemplateInf
     Ok(out)
 }
 
-#[tauri::command]
+#[tauri::command(async)]
 fn read_template(app: tauri::AppHandle, user: String, name: String) -> Result<String, String> {
+    let _fs = fs_lock();
     let (path, _) = template_paths(&app, &user, &name)?;
     match fs::read_to_string(path) {
         Ok(s) => Ok(s),
@@ -501,16 +628,18 @@ fn read_template(app: tauri::AppHandle, user: String, name: String) -> Result<St
 
 /// Creates a document from a template. Fails if anything already exists at that path.
 /// The new document starts dirty so the next sync pushes it.
-#[tauri::command]
+#[tauri::command(async)]
 fn create_document(
     app: tauri::AppHandle,
     user: String,
     path: String,
     template: String,
 ) -> Result<String, String> {
+    let _fs = fs_lock();
     if item_path(&app, &user, &path)?.exists() {
         return Err(format!("{path:?} already exists"));
     }
+    check_case(&app, &user, &path, None)?;
     let body = read_template(app.clone(), user.clone(), template)?;
     let dir = ensure_doc_dir(&app, &user, &path)?;
     write_atomic(dir.join("main.tex"), &body).map_err(|e| e.to_string())?;
@@ -522,7 +651,11 @@ fn create_document(
 fn copy_name(base: &str, taken: impl Fn(&str) -> bool) -> String {
     for n in 1.. {
         let suffix = if n == 1 { " copy".to_string() } else { format!(" copy {n}") };
-        let keep: String = base.chars().take(64usize.saturating_sub(suffix.chars().count())).collect();
+        // Bytes, not characters: that is what `valid_name` limits.
+        let mut keep = base.to_string();
+        while keep.len() + suffix.len() > 64 {
+            keep.pop();
+        }
         let name = format!("{}{}", keep.trim_end(), suffix);
         if !taken(&name) {
             return name;
@@ -533,8 +666,9 @@ fn copy_name(base: &str, taken: impl Fn(&str) -> bool) -> String {
 
 /// Duplicates a document (text and images) next to the original. The copy is a new, unsynced document.
 /// Returns its path.
-#[tauri::command]
+#[tauri::command(async)]
 fn duplicate_document(app: tauri::AppHandle, user: String, path: String) -> Result<String, String> {
+    let _fs = fs_lock();
     let from = item_path(&app, &user, &path)?;
     if !is_document(&from) {
         return Err(format!("{path:?} is not a document"));
@@ -543,6 +677,7 @@ fn duplicate_document(app: tauri::AppHandle, user: String, path: String) -> Resu
     let join = |name: &str| if parent.is_empty() { name.to_string() } else { format!("{parent}/{name}") };
     let name = copy_name(path.rsplit('/').next().unwrap_or(&path), |n| {
         item_path(&app, &user, &join(n)).map(|p| p.exists()).unwrap_or(true)
+            || check_case(&app, &user, &join(n), None).is_err()
     });
     let new_path = join(&name);
     let to = ensure_doc_dir(&app, &user, &new_path)?;
@@ -563,11 +698,13 @@ fn parent_path(path: &str) -> &str {
 }
 
 /// Duplicates a template, built-in or not, as a new unsynced template. Returns its name.
-#[tauri::command]
+#[tauri::command(async)]
 fn duplicate_template(app: tauri::AppHandle, user: String, name: String) -> Result<String, String> {
+    let _fs = fs_lock();
     let source = read_template(app.clone(), user.clone(), name.clone())?;
     let new = copy_name(&name, |n| {
         template_paths(&app, &user, n).map(|(f, _)| f.exists() || builtin(n).is_some()).unwrap_or(true)
+            || check_template_case(&app, &user, n, None).is_err()
     });
     let (file, meta) = template_paths(&app, &user, &new)?;
     write_atomic(file, source).map_err(|e| e.to_string())?;
@@ -575,7 +712,7 @@ fn duplicate_template(app: tauri::AppHandle, user: String, name: String) -> Resu
     Ok(new)
 }
 
-#[tauri::command]
+#[tauri::command(async)]
 fn save_template(
     app: tauri::AppHandle,
     user: String,
@@ -583,27 +720,31 @@ fn save_template(
     source: String,
     overwrite: bool,
 ) -> Result<(), String> {
+    let _fs = fs_lock();
     let (path, meta_path) = template_paths(&app, &user, &name)?;
     if (path.exists() || builtin(&name).is_some()) && !overwrite {
         return Err("exists".into());
     }
+    check_template_case(&app, &user, &name, None)?;
     write_atomic(path, source).map_err(|e| e.to_string())?;
     drop_template_preview(&app, &user, &name);
     update_meta(&meta_path, |m| m.dirty = true)
 }
 
-#[tauri::command]
+#[tauri::command(async)]
 fn load_source(app: tauri::AppHandle, user: String, path: String) -> Result<String, String> {
+    let _fs = fs_lock();
     fs::read_to_string(item_path(&app, &user, &path)?.join("main.tex")).map_err(|e| e.to_string())
 }
 
-#[tauri::command]
+#[tauri::command(async)]
 fn save_source(
     app: tauri::AppHandle,
     user: String,
     path: String,
     source: String,
 ) -> Result<(), String> {
+    let _fs = fs_lock();
     let dir = ensure_doc_dir(&app, &user, &path)?;
     write_atomic(dir.join("main.tex"), source).map_err(|e| e.to_string())?;
     update_meta(&dir.join(".sync.json"), |m| m.dirty = true)
@@ -611,7 +752,7 @@ fn save_source(
 
 /// Writes a document received from the server. `dirty` is true only for conflict copies,
 /// which exist solely locally and must be pushed.
-#[tauri::command]
+#[tauri::command(async)]
 fn apply_remote(
     app: tauri::AppHandle,
     user: String,
@@ -623,6 +764,7 @@ fn apply_remote(
     id: Option<String>,
     remote_path: Option<String>,
 ) -> Result<(), String> {
+    let _fs = fs_lock();
     let set = move |m: &mut Meta| {
         m.dirty = dirty;
         m.remote_at = remote_at;
@@ -631,11 +773,17 @@ fn apply_remote(
     };
     match kind.as_str() {
         "document" => {
+            check_case(&app, &user, &path, None)?;
             let dir = ensure_doc_dir(&app, &user, &path)?;
             write_atomic(dir.join("main.tex"), source).map_err(|e| e.to_string())?;
-            update_meta(&dir.join(".sync.json"), set)
+            // The new text may refer to images this device does not have yet.
+            update_meta(&dir.join(".sync.json"), |m| {
+                set(m);
+                m.images_synced = false;
+            })
         }
         "folder" => {
+            check_case(&app, &user, &path, None)?;
             let dir = item_path(&app, &user, &path)?;
             if is_document(&dir) {
                 return Err(format!("{path:?} is a document"));
@@ -644,6 +792,7 @@ fn apply_remote(
             update_meta(&dir.join(".sync.json"), set)
         }
         "template" => {
+            check_template_case(&app, &user, &path, None)?;
             let (file, meta_path) = template_paths(&app, &user, &path)?;
             write_atomic(file, source).map_err(|e| e.to_string())?;
             drop_template_preview(&app, &user, &path);
@@ -660,7 +809,7 @@ fn apply_remote(
 
 /// Records a successful push of `pushed`. The doc stays dirty if it changed while the push ran.
 /// Returns false if the item was deleted while the push was in flight (nothing is recreated for it).
-#[tauri::command]
+#[tauri::command(async)]
 fn mark_synced(
     app: tauri::AppHandle,
     user: String,
@@ -670,6 +819,7 @@ fn mark_synced(
     remote_at: String,
     id: String,
 ) -> Result<bool, String> {
+    let _fs = fs_lock();
     let (file, meta_path) = match kind.as_str() {
         "document" => {
             let dir = item_path(&app, &user, &path)?;
@@ -713,8 +863,9 @@ fn mark_synced(
 
 /// Remembers an item's server identity before it is first pushed, so a push that is interrupted
 /// halfway is recognised (not duplicated) on the next pass.
-#[tauri::command]
+#[tauri::command(async)]
 fn set_item_id(app: tauri::AppHandle, user: String, kind: String, path: String, id: String) -> Result<(), String> {
+    let _fs = fs_lock();
     let meta_path = match kind.as_str() {
         "document" => item_path(&app, &user, &path)?.join(".sync.json"),
         "folder" => item_path(&app, &user, &path)?.join(".sync.json"),
@@ -724,24 +875,32 @@ fn set_item_id(app: tauri::AppHandle, user: String, kind: String, path: String, 
     update_meta(&meta_path, |m| m.id = Some(id))
 }
 
-#[tauri::command]
+#[tauri::command(async)]
 fn list_images(app: tauri::AppHandle, user: String, path: String) -> Result<Vec<String>, String> {
-    let dir = item_path(&app, &user, &path)?.join("images");
-    let Ok(entries) = fs::read_dir(dir) else { return Ok(vec![]) };
-    Ok(entries
-        .flatten()
-        .map(|e| e.file_name().to_string_lossy().to_string())
-        .filter(|n| !n.starts_with('.'))
-        .collect())
+    let _fs = fs_lock();
+    Ok(image_names(&item_path(&app, &user, &path)?))
 }
 
-#[tauri::command]
+/// Called after a sync of a document's images: `names` is everything the server now holds. The document only
+/// counts as in step if every local image is among them (one added while the sync ran is not).
+#[tauri::command(async)]
+fn mark_images_synced(app: tauri::AppHandle, user: String, path: String, names: Vec<String>) -> Result<(), String> {
+    let _fs = fs_lock();
+    let dir = preview_dir(&app, &user, &path)?;
+    if image_names(&dir).iter().all(|n| names.contains(n)) {
+        update_meta(&dir.join(".sync.json"), |m| m.images_synced = true)?;
+    }
+    Ok(())
+}
+
+#[tauri::command(async)]
 fn read_image(
     app: tauri::AppHandle,
     user: String,
     path: String,
     name: String,
 ) -> Result<Response, String> {
+    let _fs = fs_lock();
     plain_file_name(&name)?;
     let bytes = fs::read(item_path(&app, &user, &path)?.join("images").join(name))
         .map_err(|e| e.to_string())?;
@@ -766,17 +925,22 @@ fn header(request: &Request<'_>, key: &str) -> Result<String, String> {
 
 /// Raw request body is the image bytes; headers x-user, x-path, x-name say where it goes.
 /// x-path is percent-encoded because document paths contain '/' and spaces.
+/// An image put here by the user still has to be uploaded; one that sync downloaded (header x-remote) does not.
 /// Returns the path relative to the document, for use in \includegraphics.
-#[tauri::command]
+#[tauri::command(async)]
 fn save_image(app: tauri::AppHandle, request: Request<'_>) -> Result<String, String> {
+    let _fs = fs_lock();
     let (user, path, name) =
         (header(&request, "x-user")?, header(&request, "x-path")?, header(&request, "x-name")?);
     plain_file_name(&name)?;
     let InvokeBody::Raw(bytes) = request.body() else {
         return Err("expected raw body".into());
     };
-    write_atomic(ensure_doc_dir(&app, &user, &decode(&path))?.join("images").join(&name), bytes)
-        .map_err(|e| e.to_string())?;
+    let dir = ensure_doc_dir(&app, &user, &decode(&path))?;
+    write_atomic(dir.join("images").join(&name), bytes).map_err(|e| e.to_string())?;
+    if request.headers().get("x-remote").is_none() {
+        update_meta(&dir.join(".sync.json"), |m| m.images_synced = false)?;
+    }
     Ok(format!("images/{name}"))
 }
 
@@ -787,8 +951,9 @@ fn preview_dir(app: &tauri::AppHandle, user: &str, path: &str) -> Result<PathBuf
 }
 
 /// Raw body is a PNG of the first page, freshly rendered here; it must be uploaded on the next sync.
-#[tauri::command]
+#[tauri::command(async)]
 fn save_preview(app: tauri::AppHandle, request: Request<'_>) -> Result<(), String> {
+    let _fs = fs_lock();
     let (user, path) = (header(&request, "x-user")?, header(&request, "x-path")?);
     let InvokeBody::Raw(bytes) = request.body() else {
         return Err("expected raw body".into());
@@ -804,8 +969,9 @@ fn save_preview(app: tauri::AppHandle, request: Request<'_>) -> Result<(), Strin
 }
 
 /// Same body as `save_preview`, but for a preview downloaded from the server (x-preview-at is its marker).
-#[tauri::command]
+#[tauri::command(async)]
 fn apply_preview(app: tauri::AppHandle, request: Request<'_>) -> Result<(), String> {
+    let _fs = fs_lock();
     let (user, path, at) =
         (header(&request, "x-user")?, header(&request, "x-path")?, header(&request, "x-preview-at")?);
     let InvokeBody::Raw(bytes) = request.body() else {
@@ -820,8 +986,9 @@ fn apply_preview(app: tauri::AppHandle, request: Request<'_>) -> Result<(), Stri
 }
 
 /// Records that the local preview was uploaded under marker `preview_at`.
-#[tauri::command]
+#[tauri::command(async)]
 fn mark_preview(app: tauri::AppHandle, user: String, path: String, preview_at: String) -> Result<(), String> {
+    let _fs = fs_lock();
     let dir = preview_dir(&app, &user, &path)?;
     update_meta(&dir.join(".sync.json"), |m| {
         m.preview_at = Some(preview_at);
@@ -829,8 +996,9 @@ fn mark_preview(app: tauri::AppHandle, user: String, path: String, preview_at: S
     })
 }
 
-#[tauri::command]
+#[tauri::command(async)]
 fn read_preview(app: tauri::AppHandle, user: String, path: String) -> Result<Response, String> {
+    let _fs = fs_lock();
     let bytes = fs::read(item_path(&app, &user, &path)?.join("preview.png")).map_err(|e| e.to_string())?;
     Ok(Response::new(bytes))
 }
@@ -855,12 +1023,13 @@ fn decode(s: &str) -> String {
     String::from_utf8_lossy(&out).into_owned()
 }
 
-#[tauri::command]
+#[tauri::command(async)]
 fn list_deletions(app: tauri::AppHandle, user: String) -> Result<Vec<Tombstone>, String> {
+    let _fs = fs_lock();
     read_tombstones(&app, &user)
 }
 
-#[tauri::command]
+#[tauri::command(async)]
 fn clear_deletion(
     app: tauri::AppHandle,
     user: String,
@@ -868,6 +1037,7 @@ fn clear_deletion(
     path: String,
     id: Option<String>,
 ) -> Result<(), String> {
+    let _fs = fs_lock();
     let mut t = read_tombstones(&app, &user)?;
     t.retain(|x| !same_item(x, &kind, &path, id.as_deref()));
     write_tombstones(&app, &user, &t)
@@ -900,8 +1070,9 @@ fn tombstones_for(items: &[(&'static str, String, Meta)]) -> Vec<Tombstone> {
 
 /// Deletes a document, or a folder with everything in it. Anything the server knows about is
 /// recorded first, so the deletion survives a crash and reaches other devices on the next sync.
-#[tauri::command]
+#[tauri::command(async)]
 fn delete_item(app: tauri::AppHandle, user: String, path: String) -> Result<(), String> {
+    let _fs = fs_lock();
     let dir = item_path(&app, &user, &path)?;
     if !dir.is_dir() {
         return Err(format!("{path:?} not found"));
@@ -925,8 +1096,9 @@ fn stamp_remote_paths(items: &[(&'static str, String, Meta)], app: &tauri::AppHa
 /// Renames or moves a document or folder (they are the same operation: change the path). Identity, sync state,
 /// images and preview travel with the directory; the next sync pushes the new path (and the new paths of
 /// everything inside a folder) as renames, not as delete + create.
-#[tauri::command]
+#[tauri::command(async)]
 fn move_item(app: tauri::AppHandle, user: String, from: String, to: String) -> Result<(), String> {
+    let _fs = fs_lock();
     if to == from || to.starts_with(&format!("{from}/")) {
         return Err("cannot move something into itself".into());
     }
@@ -938,6 +1110,7 @@ fn move_item(app: tauri::AppHandle, user: String, from: String, to: String) -> R
     if to_dir.exists() {
         return Err(format!("{to:?} already exists"));
     }
+    check_case(&app, &user, &to, Some(&from))?;
     stamp_remote_paths(&collect_items(&from_dir, &from), &app, &user)?;
     if let Some(parent) = to_dir.parent() {
         fs::create_dir_all(parent).map_err(|e| e.to_string())?;
@@ -964,8 +1137,9 @@ fn merge_move(from: &std::path::Path, to: &std::path::Path) -> Result<(), String
 }
 
 /// Applies a rename made on another device. Unlike `move_item` it tolerates the target folder existing already.
-#[tauri::command]
+#[tauri::command(async)]
 fn rename_local(app: tauri::AppHandle, user: String, kind: String, from: String, to: String) -> Result<(), String> {
+    let _fs = fs_lock();
     if kind == "template" {
         return rename_template_files(&app, &user, &from, &to);
     }
@@ -980,6 +1154,7 @@ fn rename_local(app: tauri::AppHandle, user: String, kind: String, from: String,
     if !from_dir.is_dir() {
         return Err(format!("{from:?} not found"));
     }
+    check_case(&app, &user, &to, Some(&from))?;
     merge_move(&from_dir, &to_dir)
 }
 
@@ -993,6 +1168,7 @@ fn rename_template_files(app: &tauri::AppHandle, user: &str, from: &str, to: &st
     if to_file.exists() || builtin(to).is_some() {
         return Err(format!("A template named {to:?} already exists"));
     }
+    check_template_case(app, user, to, Some(from))?;
     let mut meta = read_meta(&from_meta);
     if meta.remote_at.is_some() && meta.remote_path.is_none() {
         meta.remote_path = Some(from.to_string());
@@ -1007,14 +1183,16 @@ fn rename_template_files(app: &tauri::AppHandle, user: &str, from: &str, to: &st
     Ok(())
 }
 
-#[tauri::command]
+#[tauri::command(async)]
 fn rename_template(app: tauri::AppHandle, user: String, from: String, to: String) -> Result<(), String> {
+    let _fs = fs_lock();
     rename_template_files(&app, &user, &from, &to)
 }
 
 /// Deletes a user template (a built-in of the same name, if any, shows through again).
-#[tauri::command]
+#[tauri::command(async)]
 fn delete_template(app: tauri::AppHandle, user: String, name: String) -> Result<(), String> {
+    let _fs = fs_lock();
     let (file, meta_path) = template_paths(&app, &user, &name)?;
     if !file.is_file() {
         return Err(format!("{name:?} is a built-in template and cannot be deleted"));
@@ -1030,8 +1208,9 @@ fn delete_template(app: tauri::AppHandle, user: String, name: String) -> Result<
 }
 
 /// Removes a local copy of something deleted on the server. Folders are only removed when empty.
-#[tauri::command]
+#[tauri::command(async)]
 fn remove_local(app: tauri::AppHandle, user: String, kind: String, path: String) -> Result<(), String> {
+    let _fs = fs_lock();
     if kind == "template" {
         let (file, meta_path) = template_paths(&app, &user, &path)?;
         let _ = fs::remove_file(file);
@@ -1050,222 +1229,6 @@ fn remove_local(app: tauri::AppHandle, user: String, kind: String, path: String)
         }
         _ => Ok(()),
     }
-}
-
-// ---- OCR (handwriting photo -> LaTeX) via the user's own Anthropic API key ----
-
-/// Models offered in Settings. Anything else is rejected, so the key can't be pointed at an arbitrary model.
-const OCR_MODELS: [&str; 3] = ["claude-haiku-5-5", "claude-sonnet-5-5", "claude-opus-5-5"];
-
-const OCR_PROMPT: &str = "\
-You are transcribing a photo of handwritten work (a student's homework on paper or a whiteboard) into LaTeX. \
-The output is pasted into the body of an existing document that already has amsmath and amssymb loaded.
-
-Output rules:
-- Output only the LaTeX body: no preamble, no \\documentclass, no \\begin{document}, no title or \\section unless \
-it is written in the photo, and never wrap the answer in Markdown code fences or add any commentary.
-- Text is text. Sentences, problem statements and explanations are ordinary paragraphs, not math. Never put \
-prose in a math environment or inside \\text{}.
-- Put math in $...$ inline. Use a display environment only for equations that are written on their own line: \
-\\[ ... \\] for a single one, and align* only for consecutive equations that are visibly aligned or chained \
-(for example successive steps of a derivation).
-- Reproduce lists and structure: numbered or lettered parts such as (a), (b) become an enumerate with \\item \
-(use \\item[(a)] if the labels matter), and bullets become itemize. Separate paragraphs with a blank line.
-- Exercise or problem identifiers, such as \"6.12)\", \"Exercise 6.12\", \"Problem 3\" or \"Q4\", go in bold with \\textbf{}, \
-for example \\textbf{6.12)} or \\textbf{Exercise 6.12}, starting the paragraph that holds that problem.
-- Transcribe faithfully. Keep the writer's wording and notation. Do not solve, correct, complete or reorder anything.
-- Leave out crossed-out work. For a diagram or graph, write a one-line comment such as % [diagram: triangle ABC] \
-rather than inventing TikZ.
-- Mark anything illegible or uncertain with a % UNSURE comment on the line above it, and give your best guess.";
-
-/// Longest custom prompt accepted from Settings (characters).
-const OCR_PROMPT_MAX: usize = 4000;
-
-#[tauri::command]
-fn ocr_default_prompt() -> &'static str {
-    OCR_PROMPT
-}
-
-/// Models sometimes wrap the answer in ```latex ... ``` despite being told not to; strip one such wrapper.
-fn strip_code_fence(text: &str) -> String {
-    let t = text.trim();
-    if let Some(rest) = t.strip_prefix("```") {
-        if let Some(nl) = rest.find('\n') {
-            let (lang, body) = rest.split_at(nl);
-            if lang.trim().chars().all(|c| c.is_ascii_alphanumeric()) {
-                let body = body.trim_start_matches('\n');
-                let body = body.trim_end();
-                return body.strip_suffix("```").unwrap_or(body).trim().to_string();
-            }
-        }
-    }
-    t.to_string()
-}
-
-/// Per-account, device-local. Never synced and never sent anywhere except api.anthropic.com.
-fn key_file(app: &tauri::AppHandle, user: &str) -> Result<PathBuf, String> {
-    Ok(user_dir(app, user)?.join(".api_key"))
-}
-
-/// Like `write_atomic`, but the file is owner-only from the moment it exists.
-fn write_secret(path: &std::path::Path, data: &str) -> Result<(), String> {
-    use std::io::Write;
-    let tmp = path.with_file_name(".api_key.tmp");
-    let mut opts = fs::OpenOptions::new();
-    opts.write(true).create(true).truncate(true);
-    #[cfg(unix)]
-    {
-        use std::os::unix::fs::OpenOptionsExt;
-        opts.mode(0o600);
-    }
-    let mut f = opts.open(&tmp).map_err(|e| e.to_string())?;
-    f.write_all(data.as_bytes()).map_err(|e| e.to_string())?;
-    f.sync_all().map_err(|e| e.to_string())?;
-    fs::rename(&tmp, path).map_err(|e| e.to_string())
-}
-
-fn read_key(app: &tauri::AppHandle, user: &str) -> Result<String, String> {
-    fs::read_to_string(key_file(app, user)?)
-        .map(|k| k.trim().to_string())
-        .ok()
-        .filter(|k| !k.is_empty())
-        .ok_or_else(|| "No API key set. Add one in Settings → OCR.".to_string())
-}
-
-/// Saves the key, or removes it when `key` is empty. The key is never returned to the frontend.
-#[tauri::command]
-fn set_api_key(app: tauri::AppHandle, user: String, key: String) -> Result<(), String> {
-    let path = key_file(&app, &user)?;
-    let key = key.trim();
-    if key.is_empty() {
-        let _ = fs::remove_file(path);
-        return Ok(());
-    }
-    if key.len() > 300 || !key.is_ascii() || key.contains(char::is_whitespace) {
-        return Err("That doesn't look like an API key.".into());
-    }
-    write_secret(&path, key)
-}
-
-#[tauri::command]
-fn has_api_key(app: tauri::AppHandle, user: String) -> Result<bool, String> {
-    Ok(key_file(&app, &user)?.is_file())
-}
-
-fn http() -> Result<reqwest::Client, String> {
-    reqwest::Client::builder()
-        .timeout(std::time::Duration::from_secs(180))
-        .build()
-        .map_err(|e| e.to_string())
-}
-
-/// Pulls Anthropic's error message out of a failed response.
-async fn api_error(resp: reqwest::Response) -> String {
-    let status = resp.status();
-    let body: serde_json::Value = resp.json().await.unwrap_or_default();
-    let msg = body["error"]["message"].as_str().unwrap_or("request failed");
-    match status.as_u16() {
-        401 => "The API key was rejected (401). Check it in Settings → OCR.".into(),
-        429 => format!("Rate limited or out of credit (429): {msg}"),
-        _ => format!("Anthropic API error ({status}): {msg}"),
-    }
-}
-
-/// Checks the key with a free call (list models), so no tokens are spent.
-#[tauri::command]
-async fn test_api_key(app: tauri::AppHandle, user: String) -> Result<(), String> {
-    let key = read_key(&app, &user)?;
-    let resp = http()?
-        .get("https://api.anthropic.com/v1/models?limit=1")
-        .header("x-api-key", key)
-        .header("anthropic-version", "2023-06-01")
-        .send()
-        .await
-        .map_err(|e| format!("Could not reach Anthropic: {e}"))?;
-    if resp.status().is_success() { Ok(()) } else { Err(api_error(resp).await) }
-}
-
-#[derive(Serialize)]
-struct OcrResult {
-    latex: String,
-    input_tokens: u64,
-    output_tokens: u64,
-    stop_reason: String,
-}
-
-/// Raw body is a JPEG; headers x-user and x-model say whose key and which model.
-#[tauri::command]
-async fn ocr_image(app: tauri::AppHandle, request: Request<'_>) -> Result<OcrResult, String> {
-    use base64::Engine;
-    // Copy everything out of the request first, so nothing borrowed is held across an await.
-    let (user, model) = (header(&request, "x-user")?, header(&request, "x-model")?);
-    let InvokeBody::Raw(bytes) = request.body() else {
-        return Err("expected raw body".into());
-    };
-    let image = base64::engine::general_purpose::STANDARD.encode(bytes);
-    if !OCR_MODELS.contains(&model.as_str()) {
-        return Err(format!("unknown model {model:?}"));
-    }
-    let key = read_key(&app, &user)?;
-    // Optional custom prompt from Settings, base64-encoded because header values can't hold newlines.
-    let prompt = match request.headers().get("x-prompt").and_then(|v| v.to_str().ok()) {
-        Some(b64) if !b64.is_empty() => {
-            let raw = base64::engine::general_purpose::STANDARD.decode(b64).map_err(|e| e.to_string())?;
-            let text = String::from_utf8(raw).map_err(|e| e.to_string())?;
-            if text.chars().count() > OCR_PROMPT_MAX {
-                return Err(format!("The OCR prompt is longer than {OCR_PROMPT_MAX} characters."));
-            }
-            if text.trim().is_empty() { OCR_PROMPT.to_string() } else { text }
-        }
-        _ => OCR_PROMPT.to_string(),
-    };
-
-    let body = serde_json::json!({
-        "model": model,
-        "max_tokens": 8192,
-        // Transcription needs little reasoning; thinking tokens are billed as output.
-        "output_config": { "effort": "low" },
-        "messages": [{
-            "role": "user",
-            "content": [
-                { "type": "image", "source": { "type": "base64", "media_type": "image/jpeg", "data": image } },
-                { "type": "text", "text": prompt }
-            ]
-        }]
-    });
-    let resp = http()?
-        .post("https://api.anthropic.com/v1/messages")
-        .header("x-api-key", key)
-        .header("anthropic-version", "2023-06-01")
-        .json(&body)
-        .send()
-        .await
-        .map_err(|e| format!("Could not reach Anthropic: {e}"))?;
-    if !resp.status().is_success() {
-        return Err(api_error(resp).await);
-    }
-    let j: serde_json::Value = resp.json().await.map_err(|e| e.to_string())?;
-    let stop_reason = j["stop_reason"].as_str().unwrap_or("").to_string();
-    if stop_reason == "refusal" {
-        return Err("The model declined to transcribe this image.".into());
-    }
-    let latex = j["content"]
-        .as_array()
-        .map(|blocks| {
-            blocks
-                .iter()
-                .filter(|b| b["type"] == "text")
-                .filter_map(|b| b["text"].as_str())
-                .collect::<Vec<_>>()
-                .join("")
-        })
-        .unwrap_or_default();
-    Ok(OcrResult {
-        latex: strip_code_fence(&latex),
-        input_tokens: j["usage"]["input_tokens"].as_u64().unwrap_or(0),
-        output_tokens: j["usage"]["output_tokens"].as_u64().unwrap_or(0),
-        stop_reason,
-    })
 }
 
 // ---- inbox thumbnail cache ----
@@ -1287,15 +1250,17 @@ fn valid_photo_id(id: &str) -> Result<&str, String> {
     }
 }
 
-#[tauri::command]
+#[tauri::command(async)]
 fn thumb_get(app: tauri::AppHandle, user: String, id: String) -> Result<Response, String> {
+    let _fs = fs_lock();
     let bytes = fs::read(thumb_cache_dir(&app, &user)?.join(format!("{}.jpg", valid_photo_id(&id)?))).map_err(|e| e.to_string())?;
     Ok(Response::new(bytes))
 }
 
 /// Raw body is a JPEG; headers x-user and x-id.
-#[tauri::command]
+#[tauri::command(async)]
 fn thumb_put(app: tauri::AppHandle, request: Request<'_>) -> Result<(), String> {
+    let _fs = fs_lock();
     let (user, id) = (header(&request, "x-user")?, header(&request, "x-id")?);
     let InvokeBody::Raw(bytes) = request.body() else {
         return Err("expected raw body".into());
@@ -1304,8 +1269,9 @@ fn thumb_put(app: tauri::AppHandle, request: Request<'_>) -> Result<(), String> 
 }
 
 /// Drops cached thumbnails of photos that no longer exist, so the cache cannot grow without bound.
-#[tauri::command]
+#[tauri::command(async)]
 fn thumb_prune(app: tauri::AppHandle, user: String, keep: Vec<String>) -> Result<(), String> {
+    let _fs = fs_lock();
     for entry in fs::read_dir(thumb_cache_dir(&app, &user)?).map_err(|e| e.to_string())?.flatten() {
         let name = entry.file_name().to_string_lossy().to_string();
         let Some(id) = name.strip_suffix(".jpg") else { continue };
@@ -1316,170 +1282,28 @@ fn thumb_prune(app: tauri::AppHandle, user: String, keep: Vec<String>) -> Result
     Ok(())
 }
 
-/// Compile `source` and return the PDF bytes. Prefers tectonic, falls back to pdflatex.
-fn build_pdf(
-    app: &tauri::AppHandle,
-    user: &str,
-    path: &str,
-    source: &str,
-    scratch: Option<&str>,
-) -> Result<Vec<u8>, String> {
-    // Templates have no folder of their own, so they compile in a throwaway directory.
-    let dir = if let Some(name) = scratch {
-        let d = user_dir(app, user)?.join(name);
-        fs::create_dir_all(&d).map_err(|e| e.to_string())?;
-        d
-    } else {
-        ensure_doc_dir(app, user, path)?
-    };
-    write_atomic(dir.join("main.tex"), source)?;
-
-    let out = run_engine(&dir)?;
-    if !out.status.success() {
-        let log = String::from_utf8_lossy(&out.stdout).to_string()
-            + &String::from_utf8_lossy(&out.stderr);
-        return Err(log);
-    }
-    fs::read(dir.join("main.pdf")).map_err(|e| e.to_string())
-}
-
-#[tauri::command(async)]
-fn compile(
-    app: tauri::AppHandle,
-    user: String,
-    path: String,
-    source: String,
-    scratch: bool,
-) -> Result<Response, String> {
-    build_pdf(&app, &user, &path, &source, scratch.then_some(".scratch")).map(Response::new)
-}
-
-/// Stand-ins for characters that must not count as nesting when tex-fmt indents (Unicode private use, one char each).
-const FMT_STANDINS: [(char, char); 6] = [
-    ('(', '\u{E000}'), (')', '\u{E001}'), ('[', '\u{E002}'), (']', '\u{E003}'), ('{', '\u{E004}'), ('}', '\u{E005}'),
-];
-
-/// tex-fmt indents after every `(`, `[` and `{` it sees, so ordinary prose breaks it: the label in `\item[ii)]`,
-/// a list marker like `a)`, a half-open interval `[0, 1)`, `\\[2pt]`, or `\left\{ ... \right.`. In LaTeX only braces
-/// and environments nest (plus `\[ \]` and `\( \)`), so before formatting this swaps the rest for stand-ins:
-/// `(` `)` always, `[` `]` unless escaped (`\[`, `\]`), and escaped braces `\{` `\}` (they never open a group).
-/// An odd run of backslashes before a character means it is escaped.
-fn protect_delimiters(text: &str, restore: bool) -> String {
-    let mut out = String::with_capacity(text.len());
-    let mut slashes = 0usize;
-    for c in text.chars() {
-        let escaped = slashes % 2 == 1;
-        let mapped = if restore {
-            FMT_STANDINS.iter().find(|(_, s)| *s == c).map(|(o, _)| *o)
-        } else {
-            match c {
-                '(' | ')' if !escaped => Some(c),
-                '[' | ']' if !escaped => Some(c),
-                '{' | '}' if escaped => Some(c),
-                _ => None,
-            }
-            .and_then(|c| FMT_STANDINS.iter().find(|(o, _)| *o == c).map(|(_, s)| *s))
-        };
-        out.push(mapped.unwrap_or(c));
-        slashes = if c == '\\' { slashes + 1 } else { 0 };
-    }
-    out
-}
-
-/// Formats LaTeX with the `tex-fmt` crate. `indent` is "2", "4" or "tab". tex-fmt panics on input it cannot make
-/// sense of (unbalanced environments, for one), so that is caught and returned as an error message.
-#[tauri::command(async)]
-fn format_tex(text: String, wrap: bool, wraplen: u32, indent: String) -> Result<String, String> {
-    use tex_fmt::args::{Args, OptionArgs};
-    use tex_fmt::config::get_config_args;
-    use tex_fmt::format::format_file;
-    use merge::Merge;
-
-    if text.chars().any(|c| FMT_STANDINS.iter().any(|(_, s)| *s == c)) {
-        return Err("the document contains characters from the Unicode private-use area (U+E000 to U+E005)".into());
-    }
-    let text = protect_delimiters(&text, false);
-    let (tabchar, tabsize) = match indent.as_str() {
-        "tab" => ("tab", 1),
-        "4" => ("space", 4),
-        _ => ("space", 2),
-    };
-    let config = format!(
-        "wrap = {wrap}\nwraplen = {}\ntabsize = {tabsize}\ntabchar = \"{tabchar}\"\n",
-        wraplen.clamp(20, 300)
-    );
-    let run = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-        let mut opts = get_config_args(Some((PathBuf::new(), String::new(), config))).unwrap();
-        opts.merge(OptionArgs::default());
-        let mut args = Args::from(opts);
-        args.stdin = true;
-        let mut logs = Vec::new();
-        args.resolve(&mut logs);
-        let out = format_file(&text, std::path::Path::new("input"), &args, &mut logs);
-        // tex-fmt reports a document whose \begin/\end or braces do not balance only as indentation warnings
-        // ("Indent is negative", "Indent does not return to zero"). Indenting such a document would just spread
-        // the confusion, so treat those like errors and leave the text alone.
-        let errors: Vec<String> = logs
-            .iter()
-            .filter(|l| l.level == log::Level::Error || (l.level == log::Level::Warn && l.message.contains("ndent")))
-            .map(|l| match l.linum_old {
-                Some(n) => format!("line {n}: {}", l.message.trim_end_matches('.')),
-                None => l.message.trim_end_matches('.').to_string(),
-            })
-            .collect();
-        (out, errors)
-    }));
-    match run {
-        Ok((_, errors)) if !errors.is_empty() => Err(errors.join("; ")),
-        Ok((out, _)) => Ok(protect_delimiters(&out, true)),
-        Err(_) => Err("tex-fmt could not make sense of this document".into()),
-    }
-}
-
-/// Compiles and writes the PDF to `dest`, a location the user picked. This is the only way a PDF leaves the app.
-#[tauri::command(async)]
-fn export_pdf(
-    app: tauri::AppHandle,
-    user: String,
-    path: String,
-    source: String,
-    scratch: bool,
-    dest: String,
-) -> Result<(), String> {
-    let pdf = build_pdf(&app, &user, &path, &source, scratch.then_some(".scratch"))?;
-    write_atomic(dest, pdf)
-}
-
-/// Runs the LaTeX engine in `dir`: the bundled tectonic, else one on PATH, else pdflatex.
-fn run_engine(dir: &PathBuf) -> Result<std::process::Output, String> {
-    latex::wait_for_setup(); // the first-run download may still be going
-    let tectonic_args: &[&str] = &["-X", "compile", "--keep-logs", "main.tex"];
-    let mut attempts: Vec<(PathBuf, &[&str])> = Vec::new();
-    if let Some(bundled) = latex::bundled_tectonic() {
-        attempts.push((bundled, tectonic_args));
-    }
-    attempts.push(("tectonic".into(), tectonic_args));
-    attempts.push((
-        "pdflatex".into(),
-        &["-interaction=nonstopmode", "-halt-on-error", "main.tex"],
-    ));
-    for (bin, args) in attempts {
-        let mut cmd = Command::new(&bin);
-        cmd.args(args).current_dir(dir);
-        #[cfg(windows)]
-        std::os::windows::process::CommandExt::creation_flags(&mut cmd, 0x0800_0000); // no console window
-        match cmd.output() {
-            Ok(out) => return Ok(out),
-            Err(e) if e.kind() == std::io::ErrorKind::NotFound => continue,
-            Err(e) => return Err(format!("{}: {e}", bin.display())),
-        }
-    }
-    Err("No LaTeX engine found. Texture normally bundles tectonic; otherwise install tectonic or a TeX Live with pdflatex.".into())
-}
-
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
     tauri::Builder::default()
+        // A small rolling log in the app's log dir (Linux: ~/.local/share/dev.texture.desktop/logs/), so a sync or
+        // network problem can be diagnosed after the fact. The webview forwards its warnings and errors (log.ts).
+        .plugin(
+            tauri_plugin_log::Builder::new()
+                .level(log::LevelFilter::Info)
+                .level_for("tex_fmt", log::LevelFilter::Off)
+                .level_for("hyper", log::LevelFilter::Warn)
+                .level_for("hyper_util", log::LevelFilter::Warn)
+                .level_for("reqwest", log::LevelFilter::Warn)
+                .level_for("rustls", log::LevelFilter::Warn)
+                .max_file_size(2_000_000)
+                .rotation_strategy(tauri_plugin_log::RotationStrategy::KeepSome(3))
+                .timezone_strategy(tauri_plugin_log::TimezoneStrategy::UseLocal)
+                .build(),
+        )
+        // Supabase requests run in Rust through this plugin instead of the webview's fetch: WebKit keeps reusing a
+        // pooled connection that died during a sleep until the kernel gives up on it (15+ minutes), and every request
+        // in that window times out. The plugin builds a new client per request, so there is no pool to go stale.
+        .plugin(tauri_plugin_http::init())
         .plugin(tauri_plugin_opener::init())
         .plugin(tauri_plugin_dialog::init())
         .invoke_handler(tauri::generate_handler![
@@ -1494,7 +1318,7 @@ pub fn run() {
             apply_template_preview,
             mark_template_preview,
             read_template_preview,
-            compile_template_preview,
+            compile::compile_template_preview,
             read_template,
             create_document,
             save_template,
@@ -1503,6 +1327,7 @@ pub fn run() {
             apply_remote,
             mark_synced,
             list_images,
+            mark_images_synced,
             read_image,
             save_image,
             save_preview,
@@ -1520,88 +1345,24 @@ pub fn run() {
             duplicate_template,
             set_item_id,
             remove_local,
-            compile,
-            export_pdf,
-            format_tex,
+            compile::compile,
+            compile::cancel_compile,
+            compile::export_pdf,
+            format::format_tex,
             thumb_get,
             thumb_put,
             thumb_prune,
-            set_api_key,
-            has_api_key,
-            test_api_key,
-            ocr_image,
-            ocr_default_prompt,
+            ocr::set_api_key,
+            ocr::has_api_key,
+            ocr::test_api_key,
+            ocr::ocr_image,
+            ocr::ocr_default_prompt,
             latex::latex_setup_status,
             latex::start_latex_setup,
             latex::retry_latex_setup
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");
-}
-
-#[cfg(test)]
-mod ocr_tests {
-    use super::strip_code_fence;
-
-    #[test]
-    fn strips_fences() {
-        assert_eq!(strip_code_fence("```latex\nx = 1\n```"), "x = 1");
-        assert_eq!(strip_code_fence("```\nx\ny\n```\n"), "x\ny");
-        assert_eq!(strip_code_fence("  plain $x$ text "), "plain $x$ text");
-        assert_eq!(strip_code_fence("```latex\nx = 1"), "x = 1");
-    }
-}
-
-#[cfg(test)]
-mod format_tests {
-    use super::format_tex;
-
-    #[test]
-    fn indents_and_keeps_long_lines_when_wrap_is_off() {
-        let src = "\\documentclass{article}\n\\begin{document}\n\\begin{itemize}\n\\item one   \n\\item two\n\\end{itemize}\nA very long line of prose that goes on and on well past the eighty column mark for sure yes.\n\\end{document}\n";
-        let out = format_tex(src.into(), false, 80, "2".into()).unwrap();
-        assert!(out.contains("\n  \\item one\n"), "{out}");
-        assert!(out.contains("goes on and on well past the eighty column mark for sure yes.\n"), "{out}");
-    }
-
-    #[test]
-    fn wraps_when_asked() {
-        let src = "\\begin{document}\nA very long line of prose that goes on and on well past the eighty column mark for sure yes.\n\\end{document}\n";
-        let out = format_tex(src.into(), true, 40, "4".into()).unwrap();
-        assert!(out.lines().all(|l| l.len() <= 40), "{out}");
-    }
-
-    #[test]
-    fn unbalanced_input_is_refused() {
-        let r = format_tex("\\begin{document}\n\\begin{itemize}\n\\end{document}\n".into(), false, 80, "2".into());
-        assert!(r.is_err(), "{r:?}");
-        let r = format_tex("\\end{foo}\n}\n".into(), false, 80, "2".into());
-        assert!(r.is_err(), "{r:?}");
-    }
-
-    #[test]
-    fn prose_with_stray_delimiters_does_not_break_indentation() {
-        let src = "\\begin{document}\n\\begin{enumerate}\n\\item[ii)] Show that\ni) Verify\n[0, 1) is half open\n\\begin{align*}\nx &= 1 \\\\[2pt]\ny &= \\left\\{ 1 \\right.\n\\end{align*}\n\\end{enumerate}\n\\end{document}\n";
-        let out = format_tex(src.into(), false, 80, "2".into()).unwrap();
-        assert!(out.contains("\n  \\item[ii)] Show that\n"), "{out}");
-        assert!(out.contains("\n    \\begin{align*}\n"), "{out}");
-        assert!(out.contains("\\left\\{ 1 \\right."), "{out}");
-        assert!(out.ends_with("\\end{document}\n"), "{out}");
-    }
-
-    #[test]
-    fn display_math_brackets_still_nest() {
-        let src = "\\begin{document}\n\\[\nx = 1\n\\]\n\\end{document}\n";
-        let out = format_tex(src.into(), false, 80, "2".into()).unwrap();
-        assert!(out.contains("\\[\n  x = 1\n\\]"), "{out}");
-    }
-
-    #[test]
-    fn a_line_too_long_to_wrap_is_not_an_error() {
-        let long = "x".repeat(100);
-        let src = format!("\\begin{{document}}\n{long}\n\\end{{document}}\n");
-        assert!(format_tex(src, true, 40, "2".into()).is_ok());
-    }
 }
 
 #[cfg(test)]
@@ -1623,6 +1384,8 @@ mod sync_tests {
         let c = copy_name(&long, |_| false);
         assert_eq!(c.chars().count(), 64);
         assert!(c.ends_with(" copy"));
+        let accented = copy_name(&"é".repeat(32), |_| false); // 64 bytes already
+        assert!(accented.len() <= 64 && valid_name(&accented).is_ok());
     }
 
     #[test]
@@ -1659,6 +1422,29 @@ mod sync_tests {
         fs::write(root.join("B/main.tex"), "x").unwrap();
         assert!(merge_move(&root.join("A"), &root.join("B")).is_err());
         assert!(root.join("A").exists());
+        let _ = fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn names_differing_only_by_capitals_clash() {
+        let root = scratch("case");
+        fs::create_dir_all(root.join("Physics/HW 1")).unwrap();
+        fs::create_dir_all(root.join(".templates")).unwrap();
+        // exact matches and genuinely new names are fine
+        assert_eq!(case_clash(&root, &["Physics", "HW 1"]), None);
+        assert_eq!(case_clash(&root, &["Physics", "HW 2"]), None);
+        assert_eq!(case_clash(&root, &["Chemistry", "hw 1"]), None);
+        // a new item, or a new parent folder, that only differs by capitals is not
+        assert_eq!(case_clash(&root, &["Physics", "hw 1"]), Some("Physics/HW 1".into()));
+        assert_eq!(case_clash(&root, &["physics", "Lab"]), Some("Physics".into()));
+        // hidden entries are not items
+        assert_eq!(case_clash(&root, &[".Templates"]), None);
+
+        fs::write(root.join(".templates/Homework.tex"), "x").unwrap();
+        let t = root.join(".templates");
+        assert_eq!(template_case_clash(&t, "Homework"), None);
+        assert_eq!(template_case_clash(&t, "Notes"), None);
+        assert_eq!(template_case_clash(&t, "homework"), Some("Homework".into()));
         let _ = fs::remove_dir_all(root);
     }
 

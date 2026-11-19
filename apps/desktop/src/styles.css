@@ -535,3 +535,19 @@ dialog .row button[value="ok"], dialog .row button.primary, #set-ocr-save, .dlg-
 .inbox-tab .count { padding: 0 6px; border-radius: 999px; background: var(--hover); font-size: .8em; font-weight: 400; }
 .inbox-tab .count[hidden] { display: none; }
 #inbox.collapsed #inbox-tabs { display: none; }
+
+/* ---- added: restore note, account links, compile errors, preview zoom, recently deleted ---- */
+#startup-note { position: fixed; inset: 0; z-index: 5; display: grid; place-items: center; background: var(--surface); }
+#startup-note[hidden], #login [hidden] { display: none; }
+.auth-links { display: flex; justify-content: space-between; gap: 12px; margin: 4px 0 0; font-size: .9em; }
+.auth-links a { color: var(--cm-keyword); }
+#compile-errors { display: flex; flex-direction: column; align-items: flex-start; gap: 3px; margin: 0 0 8px; font-size: .85em; }
+#compile-errors[hidden] { display: none; }
+#compile-errors .linklike { text-align: left; color: #c33; }
+#compile-errors .linklike:disabled { cursor: default; text-decoration: none; }
+#pages { width: calc(100% * var(--zoom, 1)); }
+#compile-bar .icon-btn { width: 22px; height: 22px; }
+#compile-bar #zoom-label { min-width: 3.2em; text-align: center; text-decoration: none; }
+.deleted-body { padding: 12px 16px 16px; min-width: 420px; max-width: 640px; max-height: 60vh; overflow: auto; }
+.deleted-item { align-items: center; justify-content: flex-start; padding: 6px 0; border-top: 1px solid var(--border); }
+.deleted-item .deleted-name { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
