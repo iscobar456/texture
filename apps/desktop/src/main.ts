@@ -48,7 +48,7 @@ import { initSyncUi, type Pending } from "./sync-ui";
 import { getCurrentWindow } from "@tauri-apps/api/window";
 import { openUrl } from "@tauri-apps/plugin-opener";
 import {
-  DEFAULTS, EDITOR_THEMES, OCR_MODELS, OCR_PROMPT_MAX, SETTINGS_CONFIG, applyAppearance, applySyncedSettings, loadSettings,
+  DEFAULTS, THEMES, OCR_MODELS, OCR_PROMPT_MAX, SETTINGS_CONFIG, applyAppearance, applySyncedSettings, loadSettings,
   saveSettings, syncedSettingsToml, type Settings,
 } from "./settings";
 
@@ -602,7 +602,7 @@ async function initSnippets() {
 // ---- settings ----
 const field = {
   theme: $<HTMLSelectElement>("set-theme"),
-  editorTheme: $<HTMLSelectElement>("set-editor-theme"),
+  palette: $<HTMLSelectElement>("set-palette"),
   editing: $<HTMLSelectElement>("set-editing"),
   font: $<HTMLInputElement>("set-font"),
   wrap: $<HTMLInputElement>("set-wrap"),
@@ -627,7 +627,7 @@ function showSettings() {
   field.theme.value = settings.theme;
   field.ocrModel.value = settings.ocrModel;
   showPromptState();
-  field.editorTheme.value = settings.editorTheme;
+  field.palette.value = settings.palette;
   field.editing.value = settings.editing;
   field.font.value = String(settings.fontSize);
   field.wrap.checked = settings.wrap;
@@ -681,7 +681,7 @@ function readSettings() {
   const size = Number(field.font.value);
   setSettings({
     theme: field.theme.value as Settings["theme"],
-    editorTheme: field.editorTheme.value as Settings["editorTheme"],
+    palette: field.palette.value as Settings["palette"],
     editing: field.editing.value as Settings["editing"],
     fontSize: Number.isFinite(size) && size >= 10 && size <= 28 ? Math.round(size) : settings.fontSize,
     wrap: field.wrap.checked,
@@ -699,7 +699,7 @@ function readSettings() {
 }
 
 field.ocrModel.replaceChildren(...OCR_MODELS.map(([value, label]) => new Option(label, value)));
-field.editorTheme.replaceChildren(...EDITOR_THEMES.map(([value, label]) => new Option(label, value)));
+field.palette.replaceChildren(...THEMES.map(([value, label]) => new Option(label, value)));
 Object.values(field).forEach((el) => el.addEventListener("change", readSettings));
 
 const promptText = $<HTMLTextAreaElement>("ocr-prompt-text");

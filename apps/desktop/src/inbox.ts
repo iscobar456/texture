@@ -407,7 +407,7 @@ export function initInbox(deps: InboxDeps) {
 
   const icon = (d: string) => `<svg viewBox="0 0 16 16" width="16" height="16" aria-hidden="true" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round">${d}</svg>`;
   const ICON = {
-    none: icon('<rect x="2.5" y="2.5" width="11" height="11" rx="2" fill="currentColor"/><path d="M5.5 8.5l2 2 3.5-4.5" stroke="Canvas"/>'),
+    none: icon('<rect x="2.5" y="2.5" width="11" height="11" rx="2" fill="currentColor"/><path d="M5.5 8.5l2 2 3.5-4.5" style="stroke: var(--bg)"/>'),
     all: icon('<rect x="2.5" y="2.5" width="11" height="11" rx="2"/><path d="M5.5 8.5l2 2 3.5-4.5"/>'),
     trash: icon('<path d="M3 4.5h10M6.5 4.5V3h3v1.5M4.5 4.5l.6 8.5h5.8l.6-8.5M7 7v4M9 7v4"/>'),
     cancel: icon('<path d="M4 4l8 8M12 4l-8 8"/>'),

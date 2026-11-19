@@ -1,17 +1,34 @@
 import { parse, stringify } from "smol-toml";
 
-/** Editor color schemes. "soft" follows the app theme; the rest are fixed palettes (see styles.css). */
-export const EDITOR_THEMES = [
-  ["soft", "Soft (follows app theme)"],
-  ["github-light", "GitHub Light"],
-  ["solarized-light", "Solarized Light"],
-  ["gruvbox-light", "Gruvbox Light"],
-  ["solarized-dark", "Solarized Dark"],
-  ["gruvbox-dark", "Gruvbox Dark"],
-  ["nord", "Nord"],
-  ["one-dark", "One Dark"],
+/**
+ * Color themes. Each has a light and a dark palette (styles.css, `data-palette` × `data-theme`) that colors both the
+ * editor and the window; Settings → Mode picks which one.
+ */
+export const THEMES = [
+  ["soft", "Soft"],
+  ["flexoki", "Flexoki"],
+  ["catppuccin", "Catppuccin"],
+  ["rose-pine", "Rosé Pine"],
+  ["everforest", "Everforest"],
+  ["tokyo-night", "Tokyo Night"],
+  ["kanagawa", "Kanagawa"],
+  ["gruvbox", "Gruvbox"],
+  ["solarized", "Solarized"],
+  ["github", "GitHub"],
 ] as const;
-export type EditorTheme = (typeof EDITOR_THEMES)[number][0];
+export type Palette = (typeof THEMES)[number][0];
+type Mode = "system" | "light" | "dark";
+
+/** The old per-editor color schemes (before themes had both modes), as theme + the mode the editor showed. */
+const LEGACY_EDITOR_THEMES: Record<string, [Palette, "light" | "dark"]> = {
+  "github-light": ["github", "light"],
+  "solarized-light": ["solarized", "light"],
+  "gruvbox-light": ["gruvbox", "light"],
+  "solarized-dark": ["solarized", "dark"],
+  "gruvbox-dark": ["gruvbox", "dark"],
+  nord: ["tokyo-night", "dark"],
+  "one-dark": ["catppuccin", "dark"],
+};
 
 /**
  * Models offered for handwriting OCR, with $ per million tokens (input, output) from Anthropic's price list.
@@ -34,8 +51,9 @@ export function ocrHeaders(user: string, s: Settings): Record<string, string> {
 }
 
 export type Settings = {
-  theme: "system" | "light" | "dark";
-  editorTheme: EditorTheme;
+  /** Light or dark version of the theme; "system" follows the OS. */
+  theme: Mode;
+  palette: Palette;
   editing: "normal" | "vim";
   fontSize: number;
   wrap: boolean;
@@ -55,7 +73,7 @@ export type Settings = {
 
 export const DEFAULTS: Settings = {
   theme: "system",
-  editorTheme: "soft",
+  palette: "soft",
   editing: "vim",
   fontSize: 14,
   wrap: true,
@@ -103,16 +121,21 @@ const pick = <T extends string>(v: unknown, allowed: readonly T[], fallback: T):
   allowed.includes(v as T) ? (v as T) : fallback;
 
 export function loadSettings(): Settings {
-  let raw: Partial<Settings> = {};
+  let raw: Partial<Settings> & { editorTheme?: string } = {};
   try {
     raw = JSON.parse(localStorage.getItem(KEY) ?? "{}");
     // Carry over the old header Vim toggle on first run.
     if (!localStorage.getItem(KEY) && localStorage.getItem("vim") === "off") raw.editing = "normal";
   } catch {}
   const size = Number(raw.fontSize);
+  let theme = pick(raw.theme, ["system", "light", "dark"] as const, DEFAULTS.theme);
+  let palette = pick(raw.palette, THEMES.map(([v]) => v), DEFAULTS.palette);
+  // Settings saved before themes: a fixed editor scheme becomes its theme, in the mode the editor was showing.
+  const legacy = raw.palette === undefined && raw.editorTheme ? LEGACY_EDITOR_THEMES[raw.editorTheme] : undefined;
+  if (legacy) [palette, theme] = legacy;
   return {
-    theme: pick(raw.theme, ["system", "light", "dark"], DEFAULTS.theme),
-    editorTheme: pick(raw.editorTheme, EDITOR_THEMES.map(([v]) => v), DEFAULTS.editorTheme),
+    theme,
+    palette,
     editing: pick(raw.editing, ["normal", "vim"], DEFAULTS.editing),
     fontSize: Number.isFinite(size) ? Math.min(28, Math.max(10, Math.round(size))) : DEFAULTS.fontSize,
     wrap: typeof raw.wrap === "boolean" ? raw.wrap : DEFAULTS.wrap,
@@ -131,13 +154,23 @@ export function saveSettings(s: Settings) {
   try { localStorage.setItem(KEY, JSON.stringify(s)); } catch {}
 }
 
+let mode: Mode = "system";
+let darkQuery: MediaQueryList | null = null;
+/** Sets data-theme to the light or dark palette; "Match system" follows the OS as it changes, not just at launch. */
+function applyMode() {
+  if (!darkQuery) {
+    darkQuery = window.matchMedia("(prefers-color-scheme: dark)");
+    darkQuery.addEventListener("change", () => { if (mode === "system") applyMode(); });
+  }
+  document.documentElement.dataset.theme = mode === "system" ? (darkQuery.matches ? "dark" : "light") : mode;
+}
+
 /** The parts of settings that are plain CSS; the editor-specific ones are applied in main.ts. */
 export function applyAppearance(s: Settings) {
   const root = document.documentElement;
-  if (s.theme === "system") delete root.dataset.theme;
-  else root.dataset.theme = s.theme;
-  if (s.editorTheme === "soft") delete root.dataset.editorTheme;
-  else root.dataset.editorTheme = s.editorTheme;
+  mode = s.theme;
+  applyMode();
+  root.dataset.palette = s.palette;
   root.style.setProperty("--editor-font-size", `${s.fontSize}px`);
   document.getElementById("editor")?.classList.toggle("no-gutters", !s.lineNumbers);
 }

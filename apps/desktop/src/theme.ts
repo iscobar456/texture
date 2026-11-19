@@ -2,7 +2,7 @@ import { EditorView } from "@codemirror/view";
 import { HighlightStyle } from "@codemirror/language";
 import { tags as t } from "@lezer/highlight";
 
-// Colors are CSS variables (defined in styles.css) so light/dark follows the OS.
+// Colors are CSS variables set by the active theme and mode (palettes in styles.css), so the editor follows them live.
 export const softTheme = EditorView.theme({
   "&": { color: "var(--cm-fg)", backgroundColor: "var(--cm-bg)" },
   ".cm-content": { caretColor: "var(--cm-fg)" },

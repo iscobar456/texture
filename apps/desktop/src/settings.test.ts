@@ -1,4 +1,4 @@
-import { describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import { DEFAULTS, OCR_PROMPT_MAX, applySyncedSettings, syncedSettingsToml } from "./settings";
 
 describe("synced settings file", () => {
@@ -20,5 +20,26 @@ describe("synced settings file", () => {
   it("caps an oversized prompt", () => {
     const text = syncedSettingsToml({ ...DEFAULTS, ocrPrompt: "x".repeat(OCR_PROMPT_MAX + 50) });
     expect(applySyncedSettings(DEFAULTS, text).ocrPrompt.length).toBe(OCR_PROMPT_MAX);
+  });
+});
+
+describe("themes", () => {
+  const load = async (stored: object) => {
+    const store = new Map([["texture:settings", JSON.stringify(stored)]]);
+    vi.stubGlobal("localStorage", { getItem: (k: string) => store.get(k) ?? null, setItem: () => {} });
+    return (await import("./settings")).loadSettings();
+  };
+  afterEach(() => vi.unstubAllGlobals());
+
+  it("turns an old fixed editor scheme into its theme, in the mode the editor showed", async () => {
+    expect(await load({ theme: "light", editorTheme: "solarized-dark" })).toMatchObject({ palette: "solarized", theme: "dark" });
+    expect(await load({ theme: "system", editorTheme: "nord" })).toMatchObject({ palette: "tokyo-night", theme: "dark" });
+    expect(await load({ theme: "dark", editorTheme: "github-light" })).toMatchObject({ palette: "github", theme: "light" });
+  });
+
+  it("keeps the mode for the old Soft scheme, and ignores the old key once a theme is saved", async () => {
+    expect(await load({ theme: "dark", editorTheme: "soft" })).toMatchObject({ palette: "soft", theme: "dark" });
+    expect(await load({ theme: "system", palette: "kanagawa", editorTheme: "nord" })).toMatchObject({ palette: "kanagawa", theme: "system" });
+    expect(await load({ palette: "no-such-theme" })).toMatchObject({ palette: "soft" });
   });
 });
