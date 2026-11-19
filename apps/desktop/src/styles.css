@@ -658,6 +658,12 @@ header { min-height: var(--titlebar-h); box-sizing: border-box; user-select: non
 .rz-ne, .rz-nw, .rz-se, .rz-sw { width: 8px; height: 8px; }
 .rz-ne { top: 0; right: 0; cursor: nesw-resize; } .rz-sw { bottom: 0; left: 0; cursor: nesw-resize; }
 .rz-nw { top: 0; left: 0; cursor: nwse-resize; } .rz-se { bottom: 0; right: 0; cursor: nwse-resize; }
-/* An undecorated window has no edge of its own; without this a dark theme melts into a dark desktop. */
+/* An undecorated window has no edge of its own, so it gets a 1px one: a quiet mid-tone between the theme's background
+   and text, which shows on dark and light desktops and takes on the theme's tint. A light window's needs more weight
+   to show against a light desktop. */
 :root[data-platform="other"]:not([data-maximized]) body::after { content: ""; position: fixed; inset: 0; z-index: 80;
-  border: 1px solid var(--border); pointer-events: none; }
+  border: 1px solid color-mix(in srgb, var(--fg) 26%, var(--bg)); pointer-events: none; }
+:root[data-platform="other"]:not([data-theme="dark"], [data-maximized]) body::after { border-color: color-mix(in srgb, var(--fg) 40%, var(--bg)); }
+/* Unfocused window: the header fades, like a native title bar, so it is clear which window is active. */
+header > *, #win-controls { transition: opacity .15s; }
+:root[data-inactive] :is(header > *, #win-controls) { opacity: .5; }

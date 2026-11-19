@@ -13,7 +13,7 @@ const DRAG_AREAS = "header, #auth";
 const INTERACTIVE = "button, a, input, select, textarea, label, [role=menu], [contenteditable], .win-btn";
 
 const svg = (path: string) =>
-  `<svg viewBox="0 0 12 12" width="12" height="12" aria-hidden="true"><path d="${path}" fill="none" stroke="currentColor" stroke-width="1.2"/></svg>`;
+  `<svg viewBox="0 0 12 12" width="16" height="16" aria-hidden="true"><path d="${path}" fill="none" stroke="currentColor" stroke-width="1.05"/></svg>`;
 const ICON = {
   minimize: svg("M2 6.5h8"),
   maximize: svg("M2.5 2.5h7v7h-7z"),
@@ -24,6 +24,9 @@ const ICON = {
 export function initWindowChrome() {
   const win = getCurrentWindow();
   document.documentElement.dataset.platform = isMac ? "mac" : "other";
+
+  // Unfocused: the header fades (styles.css), on every platform, like a native title bar.
+  void win.onFocusChanged(({ payload: focused }) => document.documentElement.toggleAttribute("data-inactive", !focused));
 
   // Dragging: like Tauri's data-tauri-drag-region, but for the whole header minus its controls, so the empty
   // space between and around buttons works without tagging every element. Double-click maximizes.
