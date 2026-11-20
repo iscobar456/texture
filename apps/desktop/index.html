@@ -69,13 +69,15 @@
              aria-valuemin="20" aria-valuemax="80" tabindex="0" title="Drag to resize (double-click to reset)"></div>
         <section id="preview">
           <div id="preview-scroll">
-            <button id="preview-full" class="preview-full" aria-pressed="false" title="Full screen (Esc to exit)">
-            <svg class="icon-expand" viewBox="0 0 16 16" width="16" height="16" aria-hidden="true"><path d="M2 6V2h4M10 2h4v4M14 10v4h-4M6 14H2v-4" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"/></svg>
-            <svg class="icon-compress" viewBox="0 0 16 16" width="16" height="16" aria-hidden="true"><path d="M6 2v4H2M14 6h-4V2M10 14v-4h4M2 10h4v4" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"/></svg>
-          </button>
-            <button id="preview-export" class="preview-full" title="Export PDF…" aria-label="Export PDF">
-              <svg viewBox="0 0 16 16" width="16" height="16" aria-hidden="true"><path d="M8 2v8M4.5 6.8L8 10.3l3.5-3.5M2.5 13.5h11" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"/></svg>
-            </button>
+            <div id="preview-tools">
+              <button id="preview-export" class="preview-full" title="Export PDF…" aria-label="Export PDF">
+                <svg viewBox="0 0 16 16" width="16" height="16" aria-hidden="true"><path d="M8 2v8M4.5 6.8L8 10.3l3.5-3.5M2.5 13.5h11" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"/></svg>
+              </button>
+              <button id="preview-full" class="preview-full" aria-pressed="false" title="Full screen (F11)">
+                <svg class="icon-expand" viewBox="0 0 16 16" width="16" height="16" aria-hidden="true"><path d="M2 6V2h4M10 2h4v4M14 10v4h-4M6 14H2v-4" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"/></svg>
+                <svg class="icon-compress" viewBox="0 0 16 16" width="16" height="16" aria-hidden="true"><path d="M6 2v4H2M14 6h-4V2M10 14v-4h4M2 10h4v4" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"/></svg>
+              </button>
+            </div>
             <div id="pages"></div><div id="compile-errors" hidden></div><pre id="log" hidden></pre>
           </div>
           <div id="compile-bar" role="status" aria-live="polite">
@@ -148,8 +150,8 @@
           <h3>Settings</h3>
           <button type="button" class="cancel icon-btn" aria-label="Close" title="Close (Esc)"><svg viewBox="0 0 16 16" width="14" height="14" aria-hidden="true"><path d="M3.5 3.5l9 9M12.5 3.5l-9 9" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round"/></svg></button>
         </div>
-        <fieldset>
-          <legend>Appearance</legend>
+        <section class="set-group">
+          <h3>Appearance</h3>
           <label>Theme <select id="set-palette"></select></label>
           <label>Mode
             <select id="set-theme">
@@ -158,9 +160,9 @@
               <option value="dark">Dark</option>
             </select>
           </label>
-        </fieldset>
-        <fieldset>
-          <legend>Editor</legend>
+        </section>
+        <section class="set-group">
+          <h3>Editor</h3>
           <label>Default editing mode
             <select id="set-editing">
               <option value="normal">Normal</option>
@@ -170,9 +172,9 @@
           <label>Font size <input id="set-font" type="number" min="10" max="28" step="1" /></label>
           <label><input type="checkbox" id="set-wrap" /> Wrap long lines</label>
           <label><input type="checkbox" id="set-linenos" /> Show line numbers</label>
-        </fieldset>
-        <fieldset>
-          <legend>Format document</legend>
+        </section>
+        <section class="set-group">
+          <h3>Format document</h3>
           <label>Indent with
             <select id="set-fmt-indent">
               <option value="2">2 spaces</option>
@@ -182,17 +184,13 @@
           </label>
           <label><input type="checkbox" id="set-fmt-wrap" /> Break long lines</label>
           <label>Break lines longer than <input id="set-fmt-len" type="number" min="20" max="300" step="1" /> characters</label>
-        </fieldset>
-        <fieldset>
-          <legend>Compiling</legend>
+        </section>
+        <section class="set-group">
+          <h3>Compiling</h3>
           <label><input type="checkbox" id="set-auto" /> Compile automatically when I stop typing</label>
-        </fieldset>
-        <fieldset>
-          <legend>Documents</legend>
-          <label>Template for new documents <select id="set-template"></select></label>
-        </fieldset>
-        <fieldset>
-          <legend>Photo OCR (handwriting → LaTeX)</legend>
+        </section>
+        <section class="set-group">
+          <h3>Photo OCR (handwriting → LaTeX)</h3>
           <label>Model <select id="set-ocr-model"></select></label>
           <div class="ocr-key">
             <div class="ocr-key-head">
@@ -220,11 +218,11 @@
           <span class="muted">
             Uses your own Anthropic API key, so usage is billed to your Anthropic account. The key stays on this device, is never synced, and is sent only to Anthropic.
           </span>
-        </fieldset>
-        <fieldset>
-          <legend>Account</legend>
+        </section>
+        <section class="set-group">
+          <h3>Account</h3>
           <span id="set-account" class="muted"></span>
-        </fieldset>
+        </section>
         <div class="row">
           <button type="button" id="settings-reset">Reset to defaults</button>
           <button type="button" class="cancel primary">Done</button>

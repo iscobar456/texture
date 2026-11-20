@@ -638,8 +638,10 @@ export function initInbox(deps: InboxDeps) {
       img.draggable = false; // drag the whole card, not the bare image
       el.draggable = true;
       el.addEventListener("dragstart", (e) => {
-        e.dataTransfer?.setData(PHOTO_MIME, p.id);
-        if (e.dataTransfer) e.dataTransfer.effectAllowed = "copy";
+        if (!e.dataTransfer) return;
+        e.dataTransfer.setData(PHOTO_MIME, p.id);
+        e.dataTransfer.effectAllowed = "copy";
+        setSmallDragImage(e.dataTransfer, img);
       });
     }
     if (kind === "pending") {
@@ -677,17 +679,29 @@ export function initInbox(deps: InboxDeps) {
       );
       actions.classList.add("two");
     } else {
-      actions.append(
-        kind === "used"
-          ? button("Move to inbox", "Move it back to the inbox", async () => moveToInbox([p]), "")
-          : button("Insert", "Insert the photo into the document at the cursor", async () => chooseAndInsert(p), ""),
-        button("Transcribe", "Turn the handwriting into LaTeX and review it before inserting", async () => openOcr(p), ""),
-      );
+      // No Insert button: drag the card onto the editor, or Insert in the viewer.
+      if (kind === "used") actions.append(button("Move to inbox", "Move it back to the inbox", async () => moveToInbox([p]), ""));
+      actions.append(button("Transcribe", "Turn the handwriting into LaTeX and review it before inserting", async () => openOcr(p), ""));
       actions.classList.add("two");
     }
 
     el.append(box, imgBtn, when, actions);
     return el;
+  }
+
+  /**
+   * The default drag image is the whole card, drawn large; drag a small copy of the thumbnail instead. WebKit only
+   * draws a drag image from an element that is in the document, so it is parked off screen for the moment of the call.
+   */
+  function setSmallDragImage(dt: DataTransfer, img: HTMLImageElement) {
+    if (!img.complete || !img.naturalWidth) return;
+    const w = 96;
+    const ghost = img.cloneNode() as HTMLImageElement;
+    ghost.className = "drag-ghost";
+    ghost.style.width = `${w}px`;
+    document.body.append(ghost);
+    dt.setDragImage(ghost, w / 2, Math.round((img.naturalHeight / img.naturalWidth) * w) / 2);
+    setTimeout(() => ghost.remove(), 0);
   }
 
   function button(label: string, title: string, fn: () => Promise<void>, cls: string) {

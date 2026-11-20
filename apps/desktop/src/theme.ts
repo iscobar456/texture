@@ -16,8 +16,13 @@ export const softTheme = EditorView.theme({
 });
 
 export const softHighlight = HighlightStyle.define([
-  { tag: [t.keyword, t.tagName], color: "var(--cm-keyword)" },
-  { tag: [t.atom, t.number, t.bool], color: "var(--cm-number)" },
+  // In LaTeX (stex mode): tagName = commands, keyword = math delimiters ($, \[ \]), atom = arguments of \begin,
+  // \label, \ref, \cite… (and digits in text), number = digits in math. --cm-math and --cm-arg are optional per
+  // theme; a theme that leaves them out keeps one color for commands and delimiters, and one for atoms and numbers.
+  { tag: t.tagName, color: "var(--cm-keyword)" },
+  { tag: t.keyword, color: "var(--cm-math, var(--cm-keyword))" },
+  { tag: t.atom, color: "var(--cm-arg, var(--cm-number))" },
+  { tag: [t.number, t.bool], color: "var(--cm-number)" },
   { tag: [t.string, t.special(t.string)], color: "var(--cm-string)" },
   { tag: [t.bracket, t.punctuation, t.operator], color: "var(--cm-muted)" },
   { tag: t.comment, color: "var(--cm-comment)", fontStyle: "italic" },

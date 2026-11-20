@@ -613,7 +613,6 @@ const field = {
   fmtWrap: $<HTMLInputElement>("set-fmt-wrap"),
   fmtLen: $<HTMLInputElement>("set-fmt-len"),
   auto: $<HTMLInputElement>("set-auto"),
-  template: $<HTMLSelectElement>("set-template"),
   ocrModel: $<HTMLSelectElement>("set-ocr-model"),
 };
 
@@ -674,8 +673,6 @@ async function loadSyncedSettings() {
   settings = applySyncedSettings(settings, text);
   saveSettings(settings);
   showPromptState();
-  // An open Settings dialog must not write its stale choice back on the next change.
-  if ([...field.template.options].some((o) => o.value === settings.defaultTemplate)) field.template.value = settings.defaultTemplate;
 }
 
 // Changes apply immediately; there is no OK button.
@@ -692,7 +689,7 @@ function readSettings() {
     formatWrap: field.fmtWrap.checked,
     formatWrapLen: Number.isFinite(Number(field.fmtLen.value)) && Number(field.fmtLen.value) >= 20 && Number(field.fmtLen.value) <= 300 ? Math.round(Number(field.fmtLen.value)) : settings.formatWrapLen,
     autoCompile: field.auto.checked,
-    defaultTemplate: field.template.value || settings.defaultTemplate,
+    defaultTemplate: settings.defaultTemplate, // set by the New document dialog, which remembers the last choice
     ocrModel: field.ocrModel.value as Settings["ocrModel"],
     ocrPrompt: settings.ocrPrompt,
   });
@@ -738,9 +735,6 @@ $("settings-reset").addEventListener("click", () => {
 
 $("open-settings").addEventListener("click", async () => {
   showSettings();
-  const templates = await call("list_templates", { user });
-  field.template.replaceChildren(...templates.map((t) => new Option(t.path, t.path)));
-  field.template.value = templates.some((t) => t.path === settings.defaultTemplate) ? settings.defaultTemplate : templates[0].path;
   const email = (await api.sb.auth.getSession()).data.session?.user.email;
   $("set-account").textContent = email ? `Signed in as ${email}` : "";
   ocrKeyUi.reset();
@@ -771,7 +765,15 @@ $("menu-new-doc").addEventListener("click", () => void newDocumentShortcut());
 document.addEventListener(
   "keydown",
   (e) => {
-    if (!user || !(e.ctrlKey || e.metaKey) || e.altKey || e.shiftKey) return;
+    if (!(e.ctrlKey || e.metaKey) || e.altKey || e.shiftKey) return;
+    if (e.key.toLowerCase() === "q") {
+      // Quit. close() goes through onCloseRequested below, which saves the open document first.
+      e.preventDefault();
+      e.stopPropagation();
+      void getCurrentWindow().close();
+      return;
+    }
+    if (!user) return;
     if (e.key.toLowerCase() === "p" && !document.querySelector("dialog[open]")) {
       e.preventDefault();
       e.stopPropagation();
@@ -1254,13 +1256,16 @@ $("new-form").addEventListener("submit", async (e) => {
   if (submitter?.value !== "ok") return;
   const name = $<HTMLInputElement>("new-name").value.trim();
   const path = pickerFolder ? `${pickerFolder}/${name}` : name;
+  const template = $<HTMLSelectElement>("new-template").value;
   try {
-    await call("create_document", { user, path, template: $<HTMLSelectElement>("new-template").value });
+    await call("create_document", { user, path, template });
   } catch (err) {
     e.preventDefault(); // keep the dialog open
     $("new-error").textContent = String(err);
     return;
   }
+  // The last template chosen here is the default next time (and for Ctrl+P's Create and a first document).
+  if (template !== settings.defaultTemplate) setSettings({ ...settings, defaultTemplate: template });
   $<HTMLDialogElement>("picker").close();
   await openDocument(path);
 });

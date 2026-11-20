@@ -30,7 +30,13 @@ export function initWindowChrome() {
 
   // Dragging: like Tauri's data-tauri-drag-region, but for the whole header minus its controls, so the empty
   // space between and around buttons works without tagging every element. Double-click maximizes.
+  // The drag starts only once the pointer has moved a few pixels with the button held, not on the press itself:
+  // startDragging hands the pointer to the window manager, and with touchpad tap-to-click (two taps in a quick
+  // burst) the second press then never reached the page, so a double tap did not maximize.
+  const DRAG_SLOP = 4; // px
+  let press: { x: number; y: number } | null = null;
   document.addEventListener("mousedown", (e) => {
+    press = null;
     if (e.button !== 0) return;
     const t = e.target as Element;
     if (!t.closest(DRAG_AREAS) || t.closest(INTERACTIVE)) return;
@@ -38,8 +44,16 @@ export function initWindowChrome() {
     if (t.closest("#auth") && t !== document.getElementById("auth")) return;
     e.preventDefault();
     if (e.detail === 2) void win.toggleMaximize();
-    else void win.startDragging();
+    else press = { x: e.clientX, y: e.clientY };
   });
+  document.addEventListener("mousemove", (e) => {
+    if (!press) return;
+    if (!(e.buttons & 1)) { press = null; return; } // released outside the window
+    if (Math.abs(e.clientX - press.x) < DRAG_SLOP && Math.abs(e.clientY - press.y) < DRAG_SLOP) return;
+    press = null;
+    void win.startDragging();
+  });
+  document.addEventListener("mouseup", () => (press = null));
 
   if (isMac) return;
 

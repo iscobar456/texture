@@ -23,6 +23,8 @@ function sections(vimOn: boolean): Section[] {
         ["Mod-Shift-f", "Format the document with tex-fmt (indent, tidy whitespace, optionally break long lines; see Settings)"],
         ["Mod-n", "Create a new document (in the current document's folder)"],
         ["Mod-,", "Open Settings"],
+        ["F11", "Show the preview full screen (F11 or Escape to leave)"],
+        ["Mod-q", "Quit (saves the open document first)"],
         ["ArrowDown / ArrowUp", "Move through an open menu or the document search results"],
         ["Escape", "Close the menu or a dialog"],
         ["Enter", "Confirm a dialog; open the focused card in the document or template picker"],

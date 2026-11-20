@@ -142,7 +142,8 @@ export function initLayout() {
   apply();
 
   // ---- preview full screen ----
-  // Fills the window with the preview and also puts the window itself in full screen. Esc leaves both.
+  // Fills the window with the preview and also puts the window itself in full screen. F11 toggles it,
+  // Esc leaves both.
   const fullBtn = $<HTMLButtonElement>("preview-full");
   let windowWasFullscreen = false;
 
@@ -150,7 +151,7 @@ export function initLayout() {
     if (preview.classList.contains("full") === on) return;
     preview.classList.toggle("full", on);
     fullBtn.setAttribute("aria-pressed", String(on));
-    fullBtn.title = on ? "Exit full screen (Esc)" : "Full screen (Esc to exit)";
+    fullBtn.title = on ? "Exit full screen (F11 or Esc)" : "Full screen (F11)";
     try {
       const win = getCurrentWindow();
       if (on) {
@@ -167,6 +168,11 @@ export function initLayout() {
 
   fullBtn.addEventListener("click", () => void setPreviewFull(!preview.classList.contains("full")));
   document.addEventListener("keydown", (e) => {
+    if (e.key === "F11" && !$("app").hidden && !e.ctrlKey && !e.metaKey && !e.altKey && !e.shiftKey && !document.querySelector("dialog[open]")) {
+      e.preventDefault();
+      void setPreviewFull(!preview.classList.contains("full"));
+      return;
+    }
     if (e.key === "Escape" && preview.classList.contains("full") && !document.querySelector("dialog[open]")) {
       e.preventDefault();
       void setPreviewFull(false);

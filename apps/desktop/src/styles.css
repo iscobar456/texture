@@ -45,6 +45,7 @@ main > * { min-height: 0; overflow: auto; border-right: 1px solid #8884; }
   --cm-bg: #f6f5f1; --cm-fg: #3b3f46; --cm-muted: #9a9ea6; --cm-line: rgba(70, 60, 20, 0.06);
   --cm-select: #cfd8e6; --cm-keyword: #5b6fa8; --cm-number: #a0714f;
   --cm-string: #6b8f5e; --cm-comment: #9aa09a; --cm-var: #8a5f8f;
+  --cm-math: #b0605a; --cm-arg: #6b8f5e;
 }
 :root[data-theme="light"] { color-scheme: light; }
 :root[data-theme="dark"] { color-scheme: dark; }
@@ -54,6 +55,7 @@ main > * { min-height: 0; overflow: auto; border-right: 1px solid #8884; }
     --cm-bg: #2b2e34; --cm-fg: #c3c7cf; --cm-muted: #767b85; --cm-line: rgba(255, 255, 255, 0.05);
     --cm-select: #3e4757; --cm-keyword: #8fa3d6; --cm-number: #c9a07e;
     --cm-string: #9bb98c; --cm-comment: #7c8280; --cm-var: #bf9cc4;
+    --cm-math: #d98c84; --cm-arg: #9bb98c;
   }
 }
 :root[data-theme="dark"] {
@@ -61,30 +63,7 @@ main > * { min-height: 0; overflow: auto; border-right: 1px solid #8884; }
   --cm-bg: #2b2e34; --cm-fg: #c3c7cf; --cm-muted: #767b85; --cm-line: rgba(255, 255, 255, 0.05);
   --cm-select: #3e4757; --cm-keyword: #8fa3d6; --cm-number: #c9a07e;
   --cm-string: #9bb98c; --cm-comment: #7c8280; --cm-var: #bf9cc4;
-}
-
-/* Flexoki (Steph Ango): paper and ink. */
-:root[data-palette="flexoki"] {
-  --bg: #f2f0e5; --fg: #100f0f; --accent: #205ea6; --on-accent: #fffcf0; --danger: #af3029; --ok: #66800b;
-  --cm-bg: #fffcf0; --cm-fg: #100f0f; --cm-muted: #6f6e69; --cm-line: rgba(16, 15, 15, 0.04); --cm-select: #dad8ce;
-  --cm-keyword: #205ea6; --cm-number: #5e409d; --cm-string: #24837b; --cm-comment: #9f9d96; --cm-var: #a02f6f;
-}
-:root[data-palette="flexoki"][data-theme="dark"] {
-  --bg: #1c1b1a; --fg: #cecdc3; --accent: #4385be; --on-accent: #100f0f; --danger: #d14d41; --ok: #879a39;
-  --cm-bg: #100f0f; --cm-fg: #cecdc3; --cm-muted: #878580; --cm-line: rgba(255, 252, 240, 0.04); --cm-select: #343331;
-  --cm-keyword: #4385be; --cm-number: #8b7ec8; --cm-string: #3aa99f; --cm-comment: #6f6e69; --cm-var: #ce5d97;
-}
-
-/* Catppuccin: Latte and Mocha. */
-:root[data-palette="catppuccin"] {
-  --bg: #e6e9ef; --fg: #4c4f69; --accent: #8839ef; --on-accent: #eff1f5; --danger: #d20f39; --ok: #40a02b;
-  --cm-bg: #eff1f5; --cm-fg: #4c4f69; --cm-muted: #8c8fa1; --cm-line: rgba(76, 79, 105, 0.05); --cm-select: #ccd0da;
-  --cm-keyword: #8839ef; --cm-number: #d05a05; --cm-string: #3a8f27; --cm-comment: #7c7f93; --cm-var: #1e66f5;
-}
-:root[data-palette="catppuccin"][data-theme="dark"] {
-  --bg: #181825; --fg: #cdd6f4; --accent: #cba6f7; --on-accent: #1e1e2e; --danger: #f38ba8; --ok: #a6e3a1;
-  --cm-bg: #1e1e2e; --cm-fg: #cdd6f4; --cm-muted: #7f849c; --cm-line: rgba(205, 214, 244, 0.05); --cm-select: #45475a;
-  --cm-keyword: #cba6f7; --cm-number: #fab387; --cm-string: #a6e3a1; --cm-comment: #9399b2; --cm-var: #89b4fa;
+  --cm-math: #d98c84; --cm-arg: #9bb98c;
 }
 
 /* Rosé Pine: Dawn and Moon (Dawn's gold and rose darkened for contrast). */
@@ -92,11 +71,13 @@ main > * { min-height: 0; overflow: auto; border-right: 1px solid #8884; }
   --bg: #fffaf3; --fg: #575279; --accent: #286983; --on-accent: #faf4ed; --danger: #b4637a; --ok: #56949f;
   --cm-bg: #faf4ed; --cm-fg: #575279; --cm-muted: #797593; --cm-line: rgba(87, 82, 121, 0.05); --cm-select: #dfdad9;
   --cm-keyword: #286983; --cm-number: #b86a66; --cm-string: #b5701c; --cm-comment: #9893a5; --cm-var: #907aa9;
+  --cm-math: #b4637a; --cm-arg: #b5701c;
 }
 :root[data-palette="rose-pine"][data-theme="dark"] {
   --bg: #2a273f; --fg: #e0def4; --accent: #9ccfd8; --on-accent: #232136; --danger: #eb6f92; --ok: #9ccfd8;
   --cm-bg: #232136; --cm-fg: #e0def4; --cm-muted: #908caa; --cm-line: rgba(224, 222, 244, 0.05); --cm-select: #44415a;
   --cm-keyword: #3e8fb0; --cm-number: #ea9a97; --cm-string: #f6c177; --cm-comment: #6e6a86; --cm-var: #c4a7e7;
+  --cm-math: #eb6f92; --cm-arg: #f6c177;
 }
 
 /* Everforest (medium). The light syntax colors are darkened a little: the originals are too faint for long reading. */
@@ -104,47 +85,58 @@ main > * { min-height: 0; overflow: auto; border-right: 1px solid #8884; }
   --bg: #f4f0d9; --fg: #5c6a72; --accent: #23866a; --on-accent: #fdf6e3; --danger: #d13c39; --ok: #6f7f00;
   --cm-bg: #fdf6e3; --cm-fg: #5c6a72; --cm-muted: #829181; --cm-line: rgba(92, 106, 114, 0.05); --cm-select: #e0dcc7;
   --cm-keyword: #6f7f00; --cm-number: #b9539a; --cm-string: #23866a; --cm-comment: #939f91; --cm-var: #3a94c5;
+  --cm-math: #c26b1e; --cm-arg: #9c7c00;
 }
 :root[data-palette="everforest"][data-theme="dark"] {
   --bg: #232a2e; --fg: #d3c6aa; --accent: #a7c080; --on-accent: #2d353b; --danger: #e67e80; --ok: #a7c080;
   --cm-bg: #2d353b; --cm-fg: #d3c6aa; --cm-muted: #9da9a0; --cm-line: rgba(211, 198, 170, 0.05); --cm-select: #475258;
   --cm-keyword: #a7c080; --cm-number: #d699b6; --cm-string: #83c092; --cm-comment: #859289; --cm-var: #7fbbb3;
+  --cm-math: #e69875; --cm-arg: #dbbc7f;
 }
 
-/* Tokyo Night: Day and Night. */
+/* Tokyo Night: Day and Night. Recolored for LaTeX, where the original purple keywords would be every command:
+   commands cyan, math letters blue, $ and \[ \] orange, \begin/\label/\ref arguments green, numbers yellow. */
 :root[data-palette="tokyo-night"] {
   --bg: #e9e9ec; --fg: #3760bf; --accent: #2e7de9; --on-accent: #ffffff; --danger: #d20f4c; --ok: #587539;
   --cm-bg: #e1e2e7; --cm-fg: #3760bf; --cm-muted: #6172b0; --cm-line: rgba(55, 96, 191, 0.05); --cm-select: #b7c1e3;
-  --cm-keyword: #9854f1; --cm-number: #b15c00; --cm-string: #587539; --cm-comment: #848cb5; --cm-var: #2e7de9;
+  --cm-keyword: #007197; --cm-number: #8c6c3e; --cm-string: #587539; --cm-comment: #848cb5; --cm-var: #2e7de9;
+  --cm-math: #b15c00; --cm-arg: #587539;
 }
 :root[data-palette="tokyo-night"][data-theme="dark"] {
   --bg: #16161e; --fg: #c0caf5; --accent: #7aa2f7; --on-accent: #1a1b26; --danger: #f7768e; --ok: #9ece6a;
   --cm-bg: #1a1b26; --cm-fg: #c0caf5; --cm-muted: #737aa2; --cm-line: rgba(192, 202, 245, 0.04); --cm-select: #33467c;
-  --cm-keyword: #bb9af7; --cm-number: #ff9e64; --cm-string: #9ece6a; --cm-comment: #565f89; --cm-var: #7aa2f7;
+  --cm-keyword: #7dcfff; --cm-number: #e0af68; --cm-string: #9ece6a; --cm-comment: #565f89; --cm-var: #7aa2f7;
+  --cm-math: #ff9e64; --cm-arg: #9ece6a;
 }
 
-/* Kanagawa: Lotus and Wave. */
+/* Kanagawa: Lotus (light) and Dragon (dark; Wave is the bluish-purple one). */
 :root[data-palette="kanagawa"] {
   --bg: #e5ddb0; --fg: #545464; --accent: #4d699b; --on-accent: #f2ecbc; --danger: #c84053; --ok: #6f894e;
   --cm-bg: #f2ecbc; --cm-fg: #545464; --cm-muted: #716e61; --cm-line: rgba(84, 84, 100, 0.05); --cm-select: #c9cbd1;
   --cm-keyword: #624c83; --cm-number: #b35b79; --cm-string: #6f894e; --cm-comment: #8a8980; --cm-var: #4d699b;
+  --cm-math: #cc6d00; --cm-arg: #6f894e;
 }
 :root[data-palette="kanagawa"][data-theme="dark"] {
-  --bg: #16161d; --fg: #dcd7ba; --accent: #7e9cd8; --on-accent: #1f1f28; --danger: #e46876; --ok: #98bb6c;
-  --cm-bg: #1f1f28; --cm-fg: #dcd7ba; --cm-muted: #938aa9; --cm-line: rgba(220, 215, 186, 0.05); --cm-select: #2d4f67;
-  --cm-keyword: #957fb8; --cm-number: #d27e99; --cm-string: #98bb6c; --cm-comment: #727169; --cm-var: #7e9cd8;
+  --bg: #181616; --fg: #c5c9c5; --accent: #8ba4b0; --on-accent: #201d1d; --danger: #c4746e; --ok: #87a987;
+  --cm-bg: #201d1d; --cm-fg: #c5c9c5; --cm-muted: #7a8382; --cm-line: rgba(197, 201, 197, 0.05); --cm-select: #2d4f67;
+  /* Dragon's own syntax colors are so desaturated they all read as grey in LaTeX; these are Kanagawa's brighter
+     accents instead. */
+  --cm-keyword: #e6c384; --cm-number: #d27e99; --cm-string: #98bb6c; --cm-comment: #737c73; --cm-var: #7fb4ca;
+  --cm-math: #ffa066; --cm-arg: #98bb6c;
 }
 
-/* Gruvbox. */
+/* Gruvbox. Commands are blue rather than the original red keywords, which were harsh on every command. */
 :root[data-palette="gruvbox"] {
   --bg: #f2e5bc; --fg: #3c3836; --accent: #076678; --on-accent: #fbf1c7; --danger: #9d0006; --ok: #79740e;
   --cm-bg: #fbf1c7; --cm-fg: #3c3836; --cm-muted: #928374; --cm-line: rgba(0, 0, 0, 0.05); --cm-select: #d5c4a1;
-  --cm-keyword: #9d0006; --cm-number: #8f3f71; --cm-string: #79740e; --cm-comment: #928374; --cm-var: #076678;
+  --cm-keyword: #076678; --cm-number: #8f3f71; --cm-string: #79740e; --cm-comment: #928374; --cm-var: #427b58;
+  --cm-math: #af3a03; --cm-arg: #b57614;
 }
 :root[data-palette="gruvbox"][data-theme="dark"] {
   --bg: #1d2021; --fg: #ebdbb2; --accent: #83a598; --on-accent: #282828; --danger: #fb4934; --ok: #b8bb26;
   --cm-bg: #282828; --cm-fg: #ebdbb2; --cm-muted: #928374; --cm-line: rgba(255, 255, 255, 0.05); --cm-select: #504945;
-  --cm-keyword: #fb4934; --cm-number: #d3869b; --cm-string: #b8bb26; --cm-comment: #928374; --cm-var: #83a598;
+  --cm-keyword: #83a598; --cm-number: #d3869b; --cm-string: #b8bb26; --cm-comment: #928374; --cm-var: #8ec07c;
+  --cm-math: #fe8019; --cm-arg: #fabd2f;
 }
 
 /* Solarized. */
@@ -152,23 +144,28 @@ main > * { min-height: 0; overflow: auto; border-right: 1px solid #8884; }
   --bg: #eee8d5; --fg: #52676e; --accent: #268bd2; --on-accent: #fdf6e3; --danger: #dc322f; --ok: #859900;
   --cm-bg: #fdf6e3; --cm-fg: #586e75; --cm-muted: #93a1a1; --cm-line: rgba(0, 0, 0, 0.05); --cm-select: #d8d2b8;
   --cm-keyword: #859900; --cm-number: #cb4b16; --cm-string: #2aa198; --cm-comment: #93a1a1; --cm-var: #268bd2;
+  --cm-math: #d33682; --cm-arg: #b58900;
 }
 :root[data-palette="solarized"][data-theme="dark"] {
   --bg: #00212b; --fg: #93a1a1; --accent: #268bd2; --on-accent: #fdf6e3; --danger: #dc322f; --ok: #859900;
   --cm-bg: #002b36; --cm-fg: #93a1a1; --cm-muted: #586e75; --cm-line: rgba(255, 255, 255, 0.05); --cm-select: #0f4f5f;
   --cm-keyword: #859900; --cm-number: #cb4b16; --cm-string: #2aa198; --cm-comment: #657b83; --cm-var: #268bd2;
+  --cm-math: #d33682; --cm-arg: #b58900;
 }
 
-/* GitHub. */
+/* GitHub: Light and Dark Dimmed (the softer dark; plain Dark is near-black and high contrast). The keyword red (every
+   LaTeX command) is muted from GitHub's #cf222e / #f47067 so a page of commands is not harsh. */
 :root[data-palette="github"] {
   --bg: #f6f8fa; --fg: #1f2328; --accent: #0969da; --on-accent: #ffffff; --danger: #cf222e; --ok: #1a7f37;
   --cm-bg: #ffffff; --cm-fg: #1f2328; --cm-muted: #8c959f; --cm-line: rgba(0, 0, 0, 0.04); --cm-select: #b6d6f7;
-  --cm-keyword: #cf222e; --cm-number: #0550ae; --cm-string: #0a3069; --cm-comment: #6e7781; --cm-var: #8250df;
+  --cm-keyword: #c2343d; --cm-number: #0550ae; --cm-string: #0a3069; --cm-comment: #6e7781; --cm-var: #8250df;
+  --cm-math: #953800; --cm-arg: #116329;
 }
 :root[data-palette="github"][data-theme="dark"] {
-  --bg: #010409; --fg: #e6edf3; --accent: #4493f8; --on-accent: #0d1117; --danger: #f85149; --ok: #3fb950;
-  --cm-bg: #0d1117; --cm-fg: #e6edf3; --cm-muted: #7d8590; --cm-line: rgba(255, 255, 255, 0.04); --cm-select: #264f78;
-  --cm-keyword: #ff7b72; --cm-number: #79c0ff; --cm-string: #a5d6ff; --cm-comment: #8b949e; --cm-var: #d2a8ff;
+  --bg: #1c2128; --fg: #adbac7; --accent: #539bf5; --on-accent: #22272e; --danger: #e5534b; --ok: #57ab5a;
+  --cm-bg: #22272e; --cm-fg: #adbac7; --cm-muted: #636e7b; --cm-line: rgba(205, 217, 229, 0.04); --cm-select: #2f4a6b;
+  --cm-keyword: #e87d75; --cm-number: #6cb6ff; --cm-string: #96d0ff; --cm-comment: #768390; --cm-var: #dcbdfb;
+  --cm-math: #f69d50; --cm-arg: #8ddb8c;
 }
 
 
@@ -181,8 +178,10 @@ main > * { min-height: 0; overflow: auto; border-right: 1px solid #8884; }
 .settings-head { display: flex; align-items: center; justify-content: space-between; margin-bottom: 8px; }
 .settings-head h3 { margin: 0; }
 .settings { min-width: 0; gap: 12px; }
-.settings fieldset { display: flex; flex-direction: column; gap: 8px; border: 1px solid #8884; border-radius: 8px; margin: 0; }
-.settings legend { font-size: .8em; opacity: .7; padding: 0 4px; }
+.settings .set-group { display: flex; flex-direction: column; gap: 8px; border: 1px solid #8884; border-radius: 8px; padding: 10px 12px 12px; }
+/* A heading inside the box, not a fieldset <legend>: WebKitGTK draws a legend's gap in a rounded border wrong (the
+   top line stops short after the corner), and it ignores float on a legend. */
+.settings .set-group > h3 { margin: 0 0 2px; font-size: 1.05em; font-weight: 650; color: var(--fg); }
 .settings label { display: flex; align-items: center; justify-content: space-between; gap: 12px; }
 .settings label:has(input[type="checkbox"]) { justify-content: flex-start; }
 .settings input[type="number"] { width: 5em; }
@@ -343,10 +342,12 @@ kbd { display: inline-block; padding: 0 6px; border: 1px solid #8886; border-bot
 #splitter2[hidden] { display: none; }
 
 /* preview full screen */
-.preview-full { position: sticky; top: 0; float: right; z-index: 2; display: grid; place-items: center; width: 30px; height: 30px;
+/* The buttons sit in a zero-height sticky bar so they take no room: as floats, the first page flowed around
+   them and was laid out differently from the pages after it. */
+#preview-tools { position: sticky; top: 0; z-index: 2; height: 0; display: flex; justify-content: flex-end; gap: 6px; }
+.preview-full { flex: none; display: grid; place-items: center; width: 30px; height: 30px;
   padding: 0; border: 1px solid #8886; border-radius: 6px; background: var(--bg); color: inherit; cursor: pointer; opacity: .8; }
 .preview-full:hover { opacity: 1; }
-#preview-export { margin-right: 6px; } /* floats left of the full-screen button */
 .preview-full .icon-compress, #preview.full .preview-full .icon-expand { display: none; }
 #preview.full .preview-full .icon-compress { display: block; }
 #preview.full { position: fixed; inset: 0; z-index: 60; padding: 16px; border: none; background: var(--bg); }
@@ -551,6 +552,7 @@ dialog .row button[value="ok"], dialog .row button.primary, #set-ocr-save, .dlg-
 .grip { position: absolute; top: 14px; right: 14px; z-index: 1; display: grid; place-items: center; width: 24px; height: 24px; padding: 0; border: none;
   border-radius: 5px; background: #0006; color: #fff; cursor: grab; opacity: .85; }
 .grip { touch-action: none; }
+.drag-ghost { position: fixed; top: -1000px; left: -1000px; height: auto; border-radius: 4px; box-shadow: 0 2px 8px #0005; }
 .photo.dragging { z-index: 5; opacity: .92; box-shadow: 0 8px 24px #0006; cursor: grabbing; }
 .grip:hover, .grip:focus-visible { opacity: 1; background: #000a; }
 .photo.selectable .grip { display: none; }

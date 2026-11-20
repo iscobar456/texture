@@ -6,8 +6,6 @@ import { parse, stringify } from "smol-toml";
  */
 export const THEMES = [
   ["soft", "Soft"],
-  ["flexoki", "Flexoki"],
-  ["catppuccin", "Catppuccin"],
   ["rose-pine", "Rosé Pine"],
   ["everforest", "Everforest"],
   ["tokyo-night", "Tokyo Night"],
@@ -27,7 +25,7 @@ const LEGACY_EDITOR_THEMES: Record<string, [Palette, "light" | "dark"]> = {
   "solarized-dark": ["solarized", "dark"],
   "gruvbox-dark": ["gruvbox", "dark"],
   nord: ["tokyo-night", "dark"],
-  "one-dark": ["catppuccin", "dark"],
+  "one-dark": ["tokyo-night", "dark"],
 };
 
 /**
@@ -74,15 +72,15 @@ export type Settings = {
 export const DEFAULTS: Settings = {
   theme: "system",
   palette: "soft",
-  editing: "vim",
+  editing: "normal",
   fontSize: 14,
   wrap: true,
   lineNumbers: true,
-  autoCompile: false,
+  autoCompile: true,
   defaultTemplate: "Blank",
   ocrModel: "claude-sonnet-5-5",
   ocrPrompt: "",
-  formatWrap: false,
+  formatWrap: true,
   formatWrapLen: 80,
   formatIndent: "2",
 };
