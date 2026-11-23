@@ -1,5 +1,5 @@
 import 'dart:async';
-import 'dart:io';
+import 'package:http/http.dart' show ClientException;
 
 import 'package:supabase_flutter/supabase_flutter.dart';
 
@@ -10,7 +10,7 @@ bool isUnconfirmed(Object e) =>
 
 String friendlyError(Object e) {
   if (e is AuthRetryableFetchException ||
-      e is SocketException ||
+      e is ClientException ||
       e is TimeoutException) {
     return 'Can\'t reach the server. Check your connection and try again.';
   }

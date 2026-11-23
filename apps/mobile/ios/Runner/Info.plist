@@ -11,6 +11,12 @@
 			</array>
 		</dict>
 	</array>
+	<key>NSCameraUsageDescription</key>
+	<string>Texture uses the camera to photograph your handwritten work so you can add it to a document on your computer.</string>
+	<key>NSPhotoLibraryUsageDescription</key>
+	<string>Texture lets you choose photos of your work from your library to send to your computer.</string>
+	<key>ITSAppUsesNonExemptEncryption</key>
+	<false/>
 	<key>CADisableMinimumFrameDurationOnPhone</key>
 	<true/>
 	<key>CFBundleDevelopmentRegion</key>

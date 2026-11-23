@@ -1,27 +1,27 @@
 import 'dart:async';
-import 'dart:convert';
-import 'dart:io';
+import 'dart:typed_data';
 
 import 'package:flutter/material.dart';
 import 'package:image_picker/image_picker.dart';
-import 'package:path_provider/path_provider.dart';
 import 'package:supabase_flutter/supabase_flutter.dart';
 
 import 'auth_errors.dart';
+import 'delete_account.dart';
 import 'edit_photo_page.dart';
+import 'photo_store.dart';
 import 'supabase.dart';
 
 enum _State { uploading, sent, failed }
 
 class _Upload {
   _Upload(
-    this.file, {
+    this.key, {
     this.state = _State.uploading,
     this.id,
     this.delivered = false,
     this.storagePath,
   });
-  final XFile file;
+  final String key; // the edited photo in PhotoStore
   _State state;
   String? error;
   String? id; // the photos row, once inserted
@@ -31,7 +31,7 @@ class _Upload {
   bool delivered; // the desktop has shown it in its inbox
 
   Map<String, dynamic> toJson() => {
-    'path': file.path,
+    'key': key,
     'state': state.name,
     'id': id,
     'delivered': delivered,
@@ -39,67 +39,33 @@ class _Upload {
   };
 }
 
-/// The sent list survives restarts: edited photos are kept in the app's
-/// support folder (not the OS temp dir) with a small JSON index beside them.
+/// The sent list survives restarts where PhotoStore can keep it (the phone).
 class _History {
   static const _keep = 50;
-  static Directory? _dir;
-
-  static Future<Directory> _folder() async {
-    final base = await getApplicationSupportDirectory();
-    final d = Directory('${base.path}/sent/${sb.auth.currentUser!.id}');
-    await d.create(recursive: true);
-    return _dir = d;
-  }
-
-  static File _index(Directory d) => File('${d.path}/index.json');
 
   static Future<List<_Upload>> load() async {
-    final d = await _folder();
-    final f = _index(d);
-    if (!await f.exists()) return [];
     try {
-      final list = jsonDecode(await f.readAsString()) as List;
       return [
-        for (final m in list)
-          if (File(m['path'] as String).existsSync())
-            _Upload(
-              XFile(m['path'] as String),
-              // A send cut short by closing the app is retryable.
-              state: m['state'] == 'sent' ? _State.sent : _State.failed,
-              id: m['id'] as String?,
-              delivered: m['delivered'] == true,
-              storagePath: m['storagePath'] as String?,
-            ),
+        for (final m in await PhotoStore.loadIndex())
+          _Upload(
+            m['key'] as String,
+            // A send cut short by closing the app is retryable.
+            state: m['state'] == 'sent' ? _State.sent : _State.failed,
+            id: m['id'] as String?,
+            delivered: m['delivered'] == true,
+            storagePath: m['storagePath'] as String?,
+          ),
       ];
     } catch (_) {
       return [];
     }
   }
 
-  /// Moves a freshly edited photo out of temp storage.
-  static Future<String> adopt(String tmp) async {
-    final d = _dir ?? await _folder();
-    final dest = '${d.path}/${DateTime.now().microsecondsSinceEpoch}.jpg';
-    try {
-      await File(tmp).rename(dest);
-    } on FileSystemException {
-      await File(tmp).copy(dest);
-      await File(tmp).delete().catchError((_) => File(tmp));
-    }
-    return dest;
-  }
-
   static Future<void> save(List<_Upload> uploads) async {
-    final d = _dir ?? await _folder();
     for (final u in uploads.skip(_keep)) {
-      await File(u.file.path).delete().catchError((_) => File(u.file.path));
+      await PhotoStore.remove(u.key);
     }
-    final kept = uploads.take(_keep).toList();
-    final f = _index(d);
-    final tmp = File('${f.path}.tmp');
-    await tmp.writeAsString(jsonEncode([for (final u in kept) u.toJson()]));
-    await tmp.rename(f.path);
+    await PhotoStore.saveIndex([for (final u in uploads.take(_keep)) u.toJson()]);
   }
 }
 
@@ -224,16 +190,19 @@ class _CapturePageState extends State<CapturePage>
     });
     try {
       final uid = sb.auth.currentUser!.id;
-      final ext = u.file.path.split('.').last;
+      // Edited photos are always JPEG.
       final path = u.storagePath ??=
-          '$uid/${DateTime.now().microsecondsSinceEpoch}.$ext';
+          '$uid/${DateTime.now().microsecondsSinceEpoch}.jpg';
       _persist();
       await sb.storage
           .from('photos')
-          .upload(
+          .uploadBinary(
             path,
-            File(u.file.path),
-            fileOptions: const FileOptions(upsert: true),
+            await PhotoStore.read(u.key),
+            fileOptions: const FileOptions(
+              upsert: true,
+              contentType: 'image/jpeg',
+            ),
           );
       final row = await sb
           .from('photos')
@@ -258,11 +227,18 @@ class _CapturePageState extends State<CapturePage>
   Future<void> _pick(ImageSource source) async {
     final f = await _picker.pickImage(source: source);
     if (f == null || !mounted) return;
-    final edited = await Navigator.of(context).push<String>(
-      MaterialPageRoute(builder: (_) => EditPhotoPage(path: f.path)),
+    final Uint8List original;
+    try {
+      original = await f.readAsBytes();
+    } catch (_) {
+      return;
+    }
+    if (!mounted) return;
+    final edited = await Navigator.of(context).push<Uint8List>(
+      MaterialPageRoute(builder: (_) => EditPhotoPage(bytes: original)),
     );
     if (edited == null) return; // cancelled
-    final u = _Upload(XFile(await _History.adopt(edited)));
+    final u = _Upload(await PhotoStore.add(edited));
     if (!mounted) return;
     setState(() => _uploads.insert(0, u));
     _persist();
@@ -277,7 +253,7 @@ class _CapturePageState extends State<CapturePage>
       builder: (ctx) => AlertDialog(
         title: const Text('Clear the list?'),
         content: const Text(
-          'This only removes the list from this phone. Photos already sent '
+          'This only removes the list from this device. Photos already sent '
           'stay in your desktop inbox. Photos that failed to send are '
           'discarded.',
         ),
@@ -297,7 +273,7 @@ class _CapturePageState extends State<CapturePage>
     final gone = _uploads.where((u) => u.state != _State.uploading).toList();
     setState(() => _uploads.removeWhere(gone.contains));
     for (final u in gone) {
-      File(u.file.path).delete().catchError((_) => File(u.file.path));
+      PhotoStore.remove(u.key);
     }
     _persist();
   }
@@ -342,6 +318,19 @@ class _CapturePageState extends State<CapturePage>
     if (ok == true) await sb.auth.signOut();
   }
 
+  /// Once the account is gone, the sent list and its photos on this phone go
+  /// too.
+  Future<void> _deleteAccount() => showDeleteAccountDialog(
+    context,
+    beforeSignOut: () async {
+      for (final u in _uploads) {
+        await PhotoStore.remove(u.key).catchError((_) {});
+      }
+      _uploads.clear();
+      await PhotoStore.saveIndex([]);
+    },
+  );
+
   @override
   Widget build(BuildContext context) {
     final theme = Theme.of(context);
@@ -370,10 +359,18 @@ class _CapturePageState extends State<CapturePage>
                 PopupMenuButton<String>(
                   icon: const Icon(Icons.account_circle_outlined),
                   tooltip: 'Account',
-                  onSelected: (_) => _signOut(),
+                  onSelected: (v) =>
+                      v == 'delete' ? _deleteAccount() : _signOut(),
                   itemBuilder: (_) => [
                     PopupMenuItem(enabled: false, child: Text(email)),
                     const PopupMenuItem(value: 'out', child: Text('Sign out')),
+                    PopupMenuItem(
+                      value: 'delete',
+                      child: Text(
+                        'Delete account…',
+                        style: TextStyle(color: theme.colorScheme.error),
+                      ),
+                    ),
                   ],
                 ),
               ],
@@ -455,12 +452,11 @@ class _CapturePageState extends State<CapturePage>
   Widget _uploadTile(_Upload u, ThemeData theme) => ListTile(
     leading: ClipRRect(
       borderRadius: BorderRadius.circular(6),
-      child: Image.file(
-        File(u.file.path),
+      child: Image(
+        image: ResizeImage(PhotoStore.image(u.key), width: 96),
         width: 48,
         height: 48,
         fit: BoxFit.cover,
-        cacheWidth: 96,
       ),
     ),
     title: Text(switch (u.state) {

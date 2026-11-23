@@ -445,20 +445,24 @@ dialog .row { margin-top: 8px; }
 
 /* buttons: secondary by default, accent for the confirming action, red for destructive ones */
 :is(dialog .row button, .dlg-head > button:not(.icon-btn), #sync-now, #snip-edit, #snip-reset, #settings-reset,
-    #set-ocr-save, #set-ocr-test, #set-ocr-remove, #set-ocr-show, #set-ocr-prompt-edit, #ocr-prompt-reset, #login button) {
+    #set-ocr-save, #set-ocr-test, #set-ocr-remove, #set-ocr-show, #set-ocr-prompt-edit, #set-delete-account, #ocr-prompt-reset, #login button) {
   height: var(--ctl-h); padding: 0 12px; border: 1px solid var(--border); border-radius: var(--radius);
   background: var(--hover); color: inherit; cursor: pointer; white-space: nowrap; }
 :is(dialog .row button, .dlg-head > button:not(.icon-btn), #sync-now, #snip-edit, #snip-reset, #settings-reset,
-    #set-ocr-save, #set-ocr-test, #set-ocr-remove, #set-ocr-show, #set-ocr-prompt-edit, #ocr-prompt-reset, #login button):hover:not(:disabled) { background: var(--press); }
+    #set-ocr-save, #set-ocr-test, #set-ocr-remove, #set-ocr-show, #set-ocr-prompt-edit, #set-delete-account, #ocr-prompt-reset, #login button):hover:not(:disabled) { background: var(--press); }
 :is(dialog .row button, .dlg-head > button, #snip-edit, #snip-reset, #settings-reset,
-    #set-ocr-save, #set-ocr-test, #set-ocr-remove, #set-ocr-show, #set-ocr-prompt-edit, #ocr-prompt-reset, #login button):focus-visible { outline: 2px solid var(--accent); outline-offset: 1px; }
+    #set-ocr-save, #set-ocr-test, #set-ocr-remove, #set-ocr-show, #set-ocr-prompt-edit, #set-delete-account, #ocr-prompt-reset, #login button):focus-visible { outline: 2px solid var(--accent); outline-offset: 1px; }
 #sync-now:focus-visible:not(:disabled) { background: var(--press); outline: none; }
 :is(dialog .row button, #sync-now, #login button, .ocr-key button):disabled { opacity: .5; cursor: default; }
 dialog .row button[value="ok"], dialog .row button.primary, #set-ocr-save, .dlg-head > button.primary, #login button {
   background: var(--accent); border-color: transparent; color: var(--on-accent); font-weight: 600; }
 :is(dialog .row button[value="ok"], dialog .row button.primary, #set-ocr-save:not(:disabled), .dlg-head > button.primary, #login button):hover:not(:disabled) { background: var(--accent); filter: brightness(1.12); }
-#delete-form .row button[value="ok"] { background: var(--danger); color: var(--on-accent); }
-#delete-form .row button[value="ok"]:hover { background: var(--danger); }
+#delete-form .row button[value="ok"], #delete-account-form .row button[value="ok"] { background: var(--danger); color: var(--on-accent); }
+#delete-form .row button[value="ok"]:hover, #delete-account-form .row button[value="ok"]:hover { background: var(--danger); }
+#delete-account-form { max-width: 440px; }
+#delete-account-form input { width: 100%; }
+.set-account-row { display: flex; align-items: center; justify-content: space-between; gap: 12px; }
+#set-delete-account { color: var(--danger); }
 
 /* fields */
 :is(dialog, #login) :is(input:not([type="checkbox"], [type="radio"], [type="range"]), select, textarea) {

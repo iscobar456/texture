@@ -96,6 +96,8 @@ function editorNote(s: string) {
 // ---- session state (set once signed in) ----
 let api: Api;
 let user = "";
+/** Set while the account is being deleted, so the sign-out that ends it does not reload before local files go. */
+let deletingAccount = false;
 let docPath = ""; // path of the open document, e.g. "Physics/Week 3/HW 1"
 /** Set while a template (not a document) is loaded in the editor; docPath keeps the last open document. */
 let templateName: string | null = null;
@@ -739,6 +741,45 @@ $("open-settings").addEventListener("click", async () => {
   $("set-account").textContent = email ? `Signed in as ${email}` : "";
   ocrKeyUi.reset();
   $<HTMLDialogElement>("settings-dialog").showModal();
+});
+
+// ---- delete account (App Store guideline 5.1.1(v)) ----
+$("set-delete-account").addEventListener("click", () => {
+  $<HTMLInputElement>("delete-account-password").value = "";
+  $("delete-account-error").textContent = "";
+  $<HTMLDialogElement>("delete-account-dialog").showModal();
+});
+$("delete-account-form").addEventListener("submit", async (e) => {
+  const submitter = (e as SubmitEvent).submitter as HTMLButtonElement | null;
+  if (submitter?.value !== "ok") return;
+  e.preventDefault();
+  const form = $<HTMLFormElement>("delete-account-form");
+  const err = $("delete-account-error");
+  const buttons = [...form.querySelectorAll("button")];
+  err.textContent = "";
+  buttons.forEach((b) => (b.disabled = true));
+  submitter.textContent = "Deleting…";
+  try {
+    const email = (await api.sb.auth.getSession()).data.session?.user.email;
+    if (!email) throw new Error("Not signed in");
+    // Re-checking the password keeps an unattended, signed-in computer from losing the account to one click.
+    const check = await api.sb.auth.signInWithPassword({ email, password: $<HTMLInputElement>("delete-account-password").value });
+    if (check.error) throw new Error(check.error.code === "invalid_credentials" ? "Wrong password." : check.error.message);
+    deletingAccount = true;
+    await api.deleteAccount();
+  } catch (x) {
+    deletingAccount = false;
+    err.textContent = x instanceof Error ? x.message : String(x);
+    buttons.forEach((b) => (b.disabled = false));
+    submitter.textContent = "Delete account";
+    return;
+  }
+  // The server copy is gone; now this device's. A failure here leaves only local files of a deleted account.
+  await call("delete_local_account", { user }).catch((x) => console.error("delete_local_account", x));
+  try {
+    for (const k of Object.keys(localStorage)) if (k.startsWith("texture:") && k.endsWith(`:${user}`)) localStorage.removeItem(k);
+  } catch {}
+  location.reload();
 });
 
 // ---- quick switcher (Ctrl+P) ----
@@ -1579,7 +1620,7 @@ async function initAuth() {
   api = createApi(url, key, { fetch: rustFetch });
 
   api.sb.auth.onAuthStateChange((event) => {
-    if (event === "SIGNED_OUT") location.reload();
+    if (event === "SIGNED_OUT" && !deletingAccount) location.reload();
   });
 
   $("sign-out").addEventListener("click", async () => {

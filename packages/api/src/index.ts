@@ -121,6 +121,20 @@ export function createApi(url: string, anonKey: string, opts: ApiOptions = {}) {
     );
     return files.map((f) => f.name);
   };
+  /** Every file key under `folder`, at any depth. Storage lists one level at a time; folders have no id. */
+  const listTree = async (bucket: string, folder: string): Promise<string[]> => {
+    const entries = await fetchAll<{ name: string; id: string | null }>(
+      (from) => sb.storage.from(bucket).list(folder, { limit: 100, offset: from, sortBy: { column: "name", order: "asc" } }),
+      100,
+    );
+    const out: string[] = [];
+    for (const e of entries) {
+      const key = `${folder}/${e.name}`;
+      if (e.id) out.push(key);
+      else out.push(...(await listTree(bucket, key)));
+    }
+    return out;
+  };
   return {
     sb,
     /** Waiting in the inbox, newest first. */
@@ -369,6 +383,26 @@ export function createApi(url: string, anonKey: string, opts: ApiOptions = {}) {
       const { error } = await sb.from("photos").delete().eq("id", p.id);
       if (error) throw error;
       await sb.storage.from(PHOTO_BUCKET).remove([p.storage_path]).catch(() => {});
+    },
+    /**
+     * Permanently deletes the signed-in account: every stored file in both buckets, then (migration 0011) the
+     * auth user, which cascades to every table. The server refuses while any file remains, so a failure part way
+     * leaves the account in place and this can simply be called again. Signs out locally afterwards.
+     */
+    async deleteAccount() {
+      const uid = (await sb.auth.getSession()).data.session?.user.id;
+      if (!uid) throw new Error("Not signed in");
+      for (const bucket of [PHOTO_BUCKET, FILES_BUCKET]) {
+        const files = await listTree(bucket, uid);
+        for (const part of chunks(files)) {
+          const { error } = await sb.storage.from(bucket).remove(part);
+          if (error) throw error;
+        }
+      }
+      const { error } = await sb.rpc("delete_account");
+      if (error) throw error;
+      // The server session went with the user; only the local copy is left to drop.
+      await sb.auth.signOut({ scope: "local" });
     },
     /** Fires when photos arrive, are imported or are deleted (here or on another device). */
     onInboxChange(cb: () => void) {

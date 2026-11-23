@@ -5,6 +5,7 @@ target/
 build/
 .env*
 !.env.example
+!.env.release.example
 supabase/.temp/
 
 # tectonic sidecar, fetched by apps/desktop/scripts/fetch-tectonic.mjs

@@ -7,13 +7,19 @@
 # Run it after scripts/release.sh has created the draft release for the same tag (if there is none, a draft is created).
 # Needs: macOS, Xcode command line tools, rustup, Node, gh (logged in), apps/desktop/.env (and apps/mobile/.env,
 # Flutter, Xcode and CocoaPods for --ios).
-# Builds are ad-hoc signed (tauri.conf.json bundle.macOS.signingIdentity "-"), not notarized: users get the Gatekeeper
-# "Open Anyway" step described in the README. The Intel build is cross-compiled with the Rust target
+# Variables below can also go in .env.release at the repo root (gitignored; see .env.release.example).
+# Signing: with a Developer ID the DMGs are signed and notarized, so they open without a Gatekeeper warning. Set
+#   APPLE_SIGNING_IDENTITY="Developer ID Application: <name> (<TEAM ID>)"   (the certificate, in the keychain)
+#   and either APPLE_ID + APPLE_PASSWORD (an app-specific password) + APPLE_TEAM_ID,
+#   or APPLE_API_KEY + APPLE_API_ISSUER + APPLE_API_KEY_PATH (an App Store Connect API key's .p8).
+# Tauri reads these itself. Without them the builds are ad-hoc signed (tauri.conf.json signingIdentity "-") and users
+# get the Gatekeeper "Open Anyway" step described in the README. The Intel build is cross-compiled with the Rust target
 # x86_64-apple-darwin (Xcode builds both architectures); to run it here you would need Rosetta.
 # The iOS .ipa is unsigned: it installs only through a sideloading tool (AltStore, Sideloadly) that re-signs it with a
-# free Apple ID (re-sign every 7 days). TestFlight / App Store / ad-hoc distribution needs the paid developer program.
+# free Apple ID (re-sign every 7 days). For TestFlight and the App Store use scripts/release-appstore.sh instead.
 set -euo pipefail
 cd "$(dirname "$0")/.."
+. scripts/release-env.sh
 root=$PWD
 
 [ "$(uname -s)" = Darwin ] || { echo "This script must run on macOS." >&2; exit 1; }
@@ -49,6 +55,10 @@ if [ "$dry" = 0 ]; then
     echo "HEAD is not the same as the pushed upstream; git pull / git push first." >&2
     exit 1
   fi
+fi
+
+if [ -z "${APPLE_SIGNING_IDENTITY:-}" ]; then
+  echo "warning: APPLE_SIGNING_IDENTITY is not set, so the DMGs are ad-hoc signed and not notarized (see the header)" >&2
 fi
 
 npm ci

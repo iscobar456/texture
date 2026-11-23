@@ -1,4 +1,3 @@
-import 'dart:io';
 import 'dart:math' as math;
 
 import 'package:flutter/foundation.dart';
@@ -10,18 +9,19 @@ import 'package:image/image.dart' as img;
 const _maxSide = 3000;
 
 class _Prepared {
-  _Prepared(this.path, this.width, this.height);
-  final String path;
+  _Prepared(this.bytes, this.width, this.height);
+  final Uint8List bytes;
   final int width;
   final int height;
 }
 
 /// Bakes EXIF orientation into the pixels and caps the size, so the preview
-/// and the final crop agree on what "up" is.
-Future<_Prepared> _prepare(String src) => compute(_prepareSync, src);
+/// and the final crop agree on what "up" is. (`compute` runs on the UI thread
+/// on the web, where the spinner stalls for a moment instead.)
+Future<_Prepared> _prepare(Uint8List src) => compute(_prepareSync, src);
 
-_Prepared _prepareSync(String src) {
-  var im = img.decodeImage(File(src).readAsBytesSync());
+_Prepared _prepareSync(Uint8List src) {
+  var im = img.decodeImage(src);
   if (im == null) throw const FormatException('Could not read this image.');
   im = img.bakeOrientation(im);
   if (math.max(im.width, im.height) > _maxSide) {
@@ -29,23 +29,20 @@ _Prepared _prepareSync(String src) {
         ? img.copyResize(im, width: _maxSide)
         : img.copyResize(im, height: _maxSide);
   }
-  final out = '${Directory.systemTemp.path}/texture_edit_src_'
-      '${DateTime.now().microsecondsSinceEpoch}.jpg';
-  File(out).writeAsBytesSync(img.encodeJpg(im, quality: 92));
-  return _Prepared(out, im.width, im.height);
+  return _Prepared(img.encodeJpg(im, quality: 92), im.width, im.height);
 }
 
 class _EditArgs {
-  _EditArgs(this.path, this.turns, this.crop);
-  final String path;
+  _EditArgs(this.bytes, this.turns, this.crop);
+  final Uint8List bytes;
   final int turns;
   final Rect crop; // fractions of the rotated image
 }
 
-Future<String> _render(_EditArgs a) => compute(_renderSync, a);
+Future<Uint8List> _render(_EditArgs a) => compute(_renderSync, a);
 
-String _renderSync(_EditArgs a) {
-  var im = img.decodeImage(File(a.path).readAsBytesSync())!;
+Uint8List _renderSync(_EditArgs a) {
+  var im = img.decodeImage(a.bytes)!;
   if (a.turns % 4 != 0) im = img.copyRotate(im, angle: 90.0 * (a.turns % 4));
   final x = (a.crop.left * im.width).round().clamp(0, im.width - 1);
   final y = (a.crop.top * im.height).round().clamp(0, im.height - 1);
@@ -54,17 +51,14 @@ String _renderSync(_EditArgs a) {
   if (w != im.width || h != im.height) {
     im = img.copyCrop(im, x: x, y: y, width: w, height: h);
   }
-  final out = '${Directory.systemTemp.path}/texture_edit_out_'
-      '${DateTime.now().microsecondsSinceEpoch}.jpg';
-  File(out).writeAsBytesSync(img.encodeJpg(im, quality: 90));
-  return out;
+  return img.encodeJpg(im, quality: 90);
 }
 
 /// Rotate (90° steps) and crop a photo before it is uploaded. Pops with the
-/// path of the edited JPEG, or null if cancelled.
+/// edited JPEG, or null if cancelled.
 class EditPhotoPage extends StatefulWidget {
-  const EditPhotoPage({super.key, required this.path});
-  final String path;
+  const EditPhotoPage({super.key, required this.bytes});
+  final Uint8List bytes;
 
   @override
   State<EditPhotoPage> createState() => _EditPhotoPageState();
@@ -80,18 +74,11 @@ class _EditPhotoPageState extends State<EditPhotoPage> {
   @override
   void initState() {
     super.initState();
-    _prepare(widget.path).then((p) {
+    _prepare(widget.bytes).then((p) {
       if (mounted) setState(() => _src = p);
     }).catchError((Object e) {
       if (mounted) setState(() => _error = e);
     });
-  }
-
-  @override
-  void dispose() {
-    final s = _src;
-    if (s != null) File(s.path).delete().catchError((_) => File(s.path));
-    super.dispose();
   }
 
   void _rotate() {
@@ -106,7 +93,7 @@ class _EditPhotoPageState extends State<EditPhotoPage> {
   Future<void> _done() async {
     setState(() => _busy = true);
     try {
-      final out = await _render(_EditArgs(_src!.path, _turns, _crop));
+      final out = await _render(_EditArgs(_src!.bytes, _turns, _crop));
       if (mounted) Navigator.pop(context, out);
     } catch (e) {
       if (!mounted) return;
@@ -148,7 +135,7 @@ class _EditPhotoPageState extends State<EditPhotoPage> {
               children: [
                 Expanded(
                   child: _CropArea(
-                    path: src.path,
+                    bytes: src.bytes,
                     aspect: _turns.isOdd
                         ? src.height / src.width
                         : src.width / src.height,
@@ -194,14 +181,14 @@ enum _Drag { none, move, tl, tr, bl, br, left, right, top, bottom }
 
 class _CropArea extends StatefulWidget {
   const _CropArea({
-    required this.path,
+    required this.bytes,
     required this.aspect,
     required this.turns,
     required this.srcWide,
     required this.crop,
     required this.onChanged,
   });
-  final String path;
+  final Uint8List bytes;
   final double aspect; // width / height of the rotated image
   final int turns;
   final bool srcWide; // decode by width (else height) to cap the texture size
@@ -326,8 +313,9 @@ class _CropAreaState extends State<_CropArea> {
                 child: RepaintBoundary(
                   child: RotatedBox(
                     quarterTurns: turns,
-                    child: Image.file(
-                      File(widget.path),
+                    child: Image.memory(
+                      widget.bytes,
+                      gaplessPlayback: true,
                       fit: BoxFit.fill,
                       cacheWidth: widget.srcWide ? 1600 : null,
                       cacheHeight: widget.srcWide ? null : 1600,

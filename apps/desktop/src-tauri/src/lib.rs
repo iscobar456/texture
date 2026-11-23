@@ -1231,6 +1231,15 @@ fn remove_local(app: tauri::AppHandle, user: String, kind: String, path: String)
     }
 }
 
+/// After the account was deleted on the server: removes everything this device kept for it (documents, templates,
+/// sync state, the inbox cache and the OCR key). Other accounts' folders are untouched.
+#[tauri::command(async)]
+fn delete_local_account(app: tauri::AppHandle, user: String) -> Result<(), String> {
+    let _fs = fs_lock();
+    let dir = user_dir(&app, &user)?;
+    fs::remove_dir_all(dir).map_err(|e| e.to_string())
+}
+
 // ---- inbox thumbnail cache ----
 // Small previews of inbox photos, kept on this device so the inbox does not download every full-size photo
 // each session. Purely a cache: safe to delete, never synced.
@@ -1345,6 +1354,7 @@ pub fn run() {
             duplicate_template,
             set_item_id,
             remove_local,
+            delete_local_account,
             compile::compile,
             compile::cancel_compile,
             compile::export_pdf,

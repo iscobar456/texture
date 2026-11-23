@@ -312,7 +312,7 @@ class _CheckEmailPageState extends State<CheckEmailPage> {
         ),
         const SizedBox(height: 12),
         Text(
-          'Open it on this phone to confirm your address and sign in.\n\n'
+          'Open it $openLinkWhere to confirm your address and sign in.\n\n'
           'Nothing arrived? Check spam, or if you already have an account with this email, '
           'go back and sign in or reset your password.',
           style: theme.textTheme.bodyMedium,
@@ -389,7 +389,7 @@ class _ForgotPasswordPageState extends State<ForgotPasswordPage> {
             const SizedBox(height: 24),
             Text(
               'If ${_email.text.trim()} has an account, a reset link is on its way. '
-              'Open it on this phone.',
+              'Open it $openLinkWhere.',
               style: Theme.of(context).textTheme.titleMedium,
               textAlign: TextAlign.center,
             ),

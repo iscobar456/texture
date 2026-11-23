@@ -63,6 +63,7 @@ export type Commands = {
   set_item_id: [Doc & { kind: DocKind; id: string }, void];
   rename_local: [U & { kind: DocKind; from: string; to: string }, void];
   remove_local: [Doc & { kind: DocKind }, void];
+  delete_local_account: [U, void];
   list_deletions: [U, Tombstone[]];
   clear_deletion: [Doc & { kind: DocKind; id: string | null }, void];
   list_images: [Doc, string[]];
