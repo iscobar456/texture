@@ -20,8 +20,10 @@ class _Upload {
     this.id,
     this.delivered = false,
     this.storagePath,
-  });
+    DateTime? at,
+  }) : at = at ?? DateTime.now();
   final String key; // the edited photo in PhotoStore
+  final DateTime at; // when it was added to the list
   _State state;
   String? error;
   String? id; // the photos row, once inserted
@@ -36,6 +38,7 @@ class _Upload {
     'id': id,
     'delivered': delivered,
     'storagePath': storagePath,
+    'at': at.millisecondsSinceEpoch,
   };
 }
 
@@ -54,6 +57,7 @@ class _History {
             id: m['id'] as String?,
             delivered: m['delivered'] == true,
             storagePath: m['storagePath'] as String?,
+            at: _savedAt(m),
           ),
       ];
     } catch (_) {
@@ -61,11 +65,25 @@ class _History {
     }
   }
 
+  /// Entries saved before `at` existed fall back to the time in the storage
+  /// file name (`<uid>/<microseconds>.jpg`), or else to the epoch.
+  static DateTime _savedAt(Map<String, dynamic> m) {
+    final ms = m['at'];
+    if (ms is int) return DateTime.fromMillisecondsSinceEpoch(ms);
+    final name = (m['storagePath'] as String?)?.split('/').last ?? '';
+    final us = int.tryParse(name.split('.').first);
+    return us == null
+        ? DateTime.fromMillisecondsSinceEpoch(0)
+        : DateTime.fromMicrosecondsSinceEpoch(us);
+  }
+
   static Future<void> save(List<_Upload> uploads) async {
     for (final u in uploads.skip(_keep)) {
       await PhotoStore.remove(u.key);
     }
-    await PhotoStore.saveIndex([for (final u in uploads.take(_keep)) u.toJson()]);
+    await PhotoStore.saveIndex([
+      for (final u in uploads.take(_keep)) u.toJson(),
+    ]);
   }
 }
 
@@ -74,6 +92,15 @@ final _bigButton = FilledButton.styleFrom(
   textStyle: const TextStyle(fontSize: 18),
   iconSize: 28,
 );
+
+final _smallButton = OutlinedButton.styleFrom(
+  minimumSize: const Size.fromHeight(52),
+  textStyle: const TextStyle(fontSize: 16),
+  iconSize: 22,
+);
+
+/// Row padding, shared by the header and the list so their edges line up.
+const _gutter = 20.0;
 
 const _helpTitle = 'Send your work to desktop';
 const _helpText =
@@ -88,10 +115,10 @@ class CapturePage extends StatefulWidget {
   State<CapturePage> createState() => _CapturePageState();
 }
 
-class _CapturePageState extends State<CapturePage>
-    with WidgetsBindingObserver {
+class _CapturePageState extends State<CapturePage> with WidgetsBindingObserver {
   RealtimeChannel? _channel;
   Timer? _poll;
+  Timer? _clock; // keeps the "N min ago" labels current
   bool _checking = false; // a delivery lookup is in flight
   final _picker = ImagePicker();
   final _uploads = <_Upload>[]; // newest first, persisted by _History
@@ -100,12 +127,14 @@ class _CapturePageState extends State<CapturePage>
   void initState() {
     super.initState();
     WidgetsBinding.instance.addObserver(this);
-    _History.load().then((saved) {
-      if (!mounted) return;
-      // Anything added while loading stays on top.
-      setState(() => _uploads.addAll(saved));
-      _checkDelivery();
-    }).catchError((_) {});
+    _History.load()
+        .then((saved) {
+          if (!mounted) return;
+          // Anything added while loading stays on top.
+          setState(() => _uploads.addAll(saved));
+          _checkDelivery();
+        })
+        .catchError((_) {});
     // Realtime alone is not dependable on a phone (the socket can stall or drop
     // without notice), so while a sent photo is not yet delivered, also ask now
     // and then. A cheap query that stops by itself once everything is delivered.
@@ -113,6 +142,9 @@ class _CapturePageState extends State<CapturePage>
     // suspended anyway, and an `inactive`/`hidden` event with no `resumed`
     // after it used to switch polling off for good.
     _poll = Timer.periodic(const Duration(seconds: 4), (_) => _checkDelivery());
+    _clock = Timer.periodic(const Duration(seconds: 30), (_) {
+      if (mounted && _uploads.isNotEmpty) setState(() {});
+    });
     // The desktop stamps delivered_at / status on the row; realtime only
     // works while foregrounded, so resume and (re)join also re-check.
     _channel = sb
@@ -132,6 +164,7 @@ class _CapturePageState extends State<CapturePage>
   void dispose() {
     WidgetsBinding.instance.removeObserver(this);
     _poll?.cancel();
+    _clock?.cancel();
     if (_channel != null) sb.removeChannel(_channel!);
     super.dispose();
   }
@@ -339,41 +372,54 @@ class _CapturePageState extends State<CapturePage>
       body: SafeArea(
         child: Column(
           children: [
-            Row(
-              children: [
-                if (_uploads.isNotEmpty)
-                  Padding(
-                    padding: const EdgeInsets.only(left: 8),
-                    child: TextButton.icon(
-                      onPressed: _clear,
-                      icon: const Icon(Icons.clear_all),
-                      label: const Text('Clear list'),
+            Padding(
+              padding: const EdgeInsets.fromLTRB(_gutter, 16, 4, 8),
+              child: Row(
+                children: [
+                  Expanded(
+                    child: Text(
+                      'Sent photos',
+                      style: theme.textTheme.titleLarge,
                     ),
                   ),
-                const Spacer(),
-                IconButton(
-                  icon: const Icon(Icons.help_outline),
-                  tooltip: 'How it works',
-                  onPressed: _showHelp,
-                ),
-                PopupMenuButton<String>(
-                  icon: const Icon(Icons.account_circle_outlined),
-                  tooltip: 'Account',
-                  onSelected: (v) =>
-                      v == 'delete' ? _deleteAccount() : _signOut(),
-                  itemBuilder: (_) => [
-                    PopupMenuItem(enabled: false, child: Text(email)),
-                    const PopupMenuItem(value: 'out', child: Text('Sign out')),
-                    PopupMenuItem(
-                      value: 'delete',
-                      child: Text(
-                        'Delete account…',
-                        style: TextStyle(color: theme.colorScheme.error),
-                      ),
+                  if (_uploads.isNotEmpty)
+                    IconButton(
+                      icon: const Icon(Icons.delete_sweep_outlined),
+                      tooltip: 'Clear list',
+                      onPressed: _clear,
                     ),
-                  ],
-                ),
-              ],
+                  IconButton(
+                    icon: const Icon(Icons.help_outline),
+                    tooltip: 'How it works',
+                    onPressed: _showHelp,
+                  ),
+                  PopupMenuButton<String>(
+                    icon: const Icon(Icons.account_circle_outlined),
+                    tooltip: 'Account',
+                    onSelected: (v) =>
+                        v == 'delete' ? _deleteAccount() : _signOut(),
+                    itemBuilder: (_) => [
+                      PopupMenuItem(enabled: false, child: Text(email)),
+                      const PopupMenuItem(
+                        value: 'out',
+                        child: Text('Sign out'),
+                      ),
+                      PopupMenuItem(
+                        value: 'delete',
+                        child: Text(
+                          'Delete account…',
+                          style: TextStyle(color: theme.colorScheme.error),
+                        ),
+                      ),
+                    ],
+                  ),
+                ],
+              ),
+            ),
+            Divider(
+              height: 1,
+              thickness: 1,
+              color: theme.colorScheme.outlineVariant,
             ),
             Expanded(
               child: _uploads.isEmpty
@@ -410,17 +456,34 @@ class _CapturePageState extends State<CapturePage>
                         ),
                       ),
                     )
-                  : ListView.builder(
-                      padding: const EdgeInsets.symmetric(horizontal: 12),
-                      itemCount: _uploads.length,
-                      itemBuilder: (_, i) => _uploadTile(_uploads[i], theme),
+                  // Rows fade out above the buttons instead of ending at a
+                  // hard edge.
+                  : ShaderMask(
+                      shaderCallback: (r) => const LinearGradient(
+                        begin: Alignment.topCenter,
+                        end: Alignment.bottomCenter,
+                        colors: [Colors.black, Colors.transparent],
+                        stops: [0.94, 1],
+                      ).createShader(r),
+                      blendMode: BlendMode.dstIn,
+                      child: ListView.separated(
+                        padding: const EdgeInsets.fromLTRB(
+                          _gutter,
+                          16,
+                          _gutter,
+                          24,
+                        ),
+                        itemCount: _uploads.length,
+                        separatorBuilder: (_, _) => const SizedBox(height: 12),
+                        itemBuilder: (_, i) => _uploadTile(_uploads[i], theme),
+                      ),
                     ),
             ),
             Center(
               child: ConstrainedBox(
                 constraints: const BoxConstraints(maxWidth: 320),
                 child: Padding(
-                  padding: const EdgeInsets.fromLTRB(16, 8, 16, 32),
+                  padding: const EdgeInsets.fromLTRB(16, 8, 16, 24),
                   child: Column(
                     mainAxisSize: MainAxisSize.min,
                     crossAxisAlignment: CrossAxisAlignment.stretch,
@@ -431,9 +494,9 @@ class _CapturePageState extends State<CapturePage>
                         icon: const Icon(Icons.photo_camera),
                         label: const Text('Take photo'),
                       ),
-                      const SizedBox(height: 16),
+                      const SizedBox(height: 12),
                       OutlinedButton.icon(
-                        style: _bigButton,
+                        style: _smallButton,
                         onPressed: () => _pick(ImageSource.gallery),
                         icon: const Icon(Icons.photo_library),
                         label: const Text('Choose from gallery'),
@@ -449,39 +512,123 @@ class _CapturePageState extends State<CapturePage>
     );
   }
 
-  Widget _uploadTile(_Upload u, ThemeData theme) => ListTile(
-    leading: ClipRRect(
-      borderRadius: BorderRadius.circular(6),
-      child: Image(
-        image: ResizeImage(PhotoStore.image(u.key), width: 96),
-        width: 48,
-        height: 48,
-        fit: BoxFit.cover,
+  /// "Just now", "5 min ago", "Today 14:03", "Yesterday 09:12", "Nov 3, 14:03".
+  String _when(DateTime t) {
+    if (t.millisecondsSinceEpoch == 0) return '';
+    final loc = MaterialLocalizations.of(context);
+    final now = DateTime.now();
+    final ago = now.difference(t);
+    if (ago.inMinutes < 1) return 'Just now';
+    if (ago.inMinutes < 60) return '${ago.inMinutes} min ago';
+    final time = loc.formatTimeOfDay(
+      TimeOfDay.fromDateTime(t),
+      alwaysUse24HourFormat: MediaQuery.alwaysUse24HourFormatOf(context),
+    );
+    final today = DateTime(now.year, now.month, now.day);
+    final day = DateTime(t.year, t.month, t.day);
+    final days = today.difference(day).inDays;
+    if (days == 0) return 'Today $time';
+    if (days == 1) return 'Yesterday $time';
+    return '${loc.formatShortMonthDay(t)}, $time';
+  }
+
+  void _preview(_Upload u) {
+    showDialog<void>(
+      context: context,
+      barrierColor: Colors.black87,
+      builder: (ctx) => GestureDetector(
+        onTap: () => Navigator.pop(ctx),
+        child: InteractiveViewer(
+          maxScale: 5,
+          child: Center(child: Image(image: PhotoStore.image(u.key))),
+        ),
       ),
-    ),
-    title: Text(switch (u.state) {
-      _State.uploading => 'Sending…',
-      _State.sent =>
-        u.delivered
-            ? 'Delivered to desktop'
-            : 'Uploaded · waiting for desktop',
-      _State.failed => 'Failed to send',
-    }),
-    subtitle: u.error == null ? null : Text(u.error!),
-    trailing: switch (u.state) {
-      _State.uploading => const SizedBox(
-        width: 24,
-        height: 24,
-        child: CircularProgressIndicator(strokeWidth: 2),
-      ),
-      _State.sent => Icon(
-        u.delivered ? Icons.done_all : Icons.check_circle_outline,
-        color: theme.colorScheme.primary,
-      ),
-      _State.failed => TextButton(
-        onPressed: () => _upload(u),
-        child: const Text('Retry'),
-      ),
-    },
-  );
+    );
+  }
+
+  Widget _uploadTile(_Upload u, ThemeData theme) {
+    final scheme = theme.colorScheme;
+    final failed = u.state == _State.failed;
+    // Delivered rows step back so anything still in progress stands out.
+    final done = u.state == _State.sent && u.delivered;
+    final when = _when(u.at);
+    return Row(
+      children: [
+        Opacity(
+          opacity: done ? 0.7 : 1,
+          child: Material(
+            clipBehavior: Clip.antiAlias,
+            borderRadius: BorderRadius.circular(8),
+            child: Ink.image(
+              image: ResizeImage(PhotoStore.image(u.key), width: 192),
+              width: 64,
+              height: 64,
+              fit: BoxFit.cover,
+              child: InkWell(
+                onTap: () => _preview(u),
+                child: Semantics(label: 'View photo'),
+              ),
+            ),
+          ),
+        ),
+        const SizedBox(width: 16),
+        Expanded(
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              Text(
+                switch (u.state) {
+                  _State.uploading => 'Sending…',
+                  _State.sent => u.delivered ? 'Delivered' : 'Sent',
+                  _State.failed => 'Failed',
+                },
+                style: theme.textTheme.titleMedium?.copyWith(
+                  color: failed
+                      ? scheme.error
+                      : done
+                      ? scheme.onSurfaceVariant
+                      : scheme.onSurface,
+                ),
+              ),
+              if (failed && u.error != null)
+                Text(
+                  u.error!,
+                  maxLines: 2,
+                  overflow: TextOverflow.ellipsis,
+                  style: theme.textTheme.bodyMedium?.copyWith(
+                    color: scheme.onSurfaceVariant,
+                  ),
+                )
+              else if (when.isNotEmpty)
+                Text(
+                  u.state == _State.sent && !u.delivered
+                      ? '$when · waiting for desktop'
+                      : when,
+                  style: theme.textTheme.bodyMedium?.copyWith(
+                    color: scheme.onSurfaceVariant,
+                  ),
+                ),
+            ],
+          ),
+        ),
+        const SizedBox(width: 8),
+        switch (u.state) {
+          _State.uploading => const SizedBox(
+            width: 24,
+            height: 24,
+            child: CircularProgressIndicator(strokeWidth: 2),
+          ),
+          _State.sent => Icon(
+            u.delivered ? Icons.done_all : Icons.check_circle_outline,
+            color: done ? scheme.onSurfaceVariant : scheme.primary,
+          ),
+          _State.failed => TextButton.icon(
+            onPressed: () => _upload(u),
+            icon: const Icon(Icons.refresh),
+            label: const Text('Retry'),
+          ),
+        },
+      ],
+    );
+  }
 }

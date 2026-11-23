@@ -14,6 +14,23 @@ Future<void> main() async {
   runApp(const TextureApp());
 }
 
+/// Indigo accents on neutral grays: the seeded dark surfaces are near black
+/// with a purple tint.
+final _darkScheme =
+    ColorScheme.fromSeed(
+      seedColor: Colors.indigo,
+      brightness: Brightness.dark,
+    ).copyWith(
+      surface: const Color(0xFF1C1D20),
+      surfaceDim: const Color(0xFF1C1D20),
+      surfaceBright: const Color(0xFF3B3C40),
+      surfaceContainerLowest: const Color(0xFF16171A),
+      surfaceContainerLow: const Color(0xFF212225),
+      surfaceContainer: const Color(0xFF25262A),
+      surfaceContainerHigh: const Color(0xFF2D2E32),
+      surfaceContainerHighest: const Color(0xFF37383C),
+    );
+
 final _navigatorKey = GlobalKey<NavigatorState>();
 
 class TextureApp extends StatelessWidget {
@@ -24,11 +41,7 @@ class TextureApp extends StatelessWidget {
     title: 'Texture',
     navigatorKey: _navigatorKey,
     theme: ThemeData(colorSchemeSeed: Colors.indigo, useMaterial3: true),
-    darkTheme: ThemeData(
-      colorSchemeSeed: Colors.indigo,
-      brightness: Brightness.dark,
-      useMaterial3: true,
-    ),
+    darkTheme: ThemeData(colorScheme: _darkScheme, useMaterial3: true),
     themeMode: ThemeMode.system,
     home: const _AuthGate(),
   );
