@@ -17,7 +17,9 @@ class SignInPage extends StatefulWidget {
 class _SignInPageState extends State<SignInPage> {
   final _email = TextEditingController();
   final _password = TextEditingController();
-  String? _error;
+  String? _error; // from the server; field problems are shown on the fields
+  String? _emailError;
+  String? _passwordError;
   bool _busy = false;
   bool _unconfirmed = false;
 
@@ -29,16 +31,18 @@ class _SignInPageState extends State<SignInPage> {
   }
 
   Future<void> _submit() async {
+    if (_busy) return;
     final email = _email.text.trim(), password = _password.text;
-    if (!looksLikeEmail(email))
-      return setState(() => _error = 'Enter a valid email address.');
-    if (password.isEmpty)
-      return setState(() => _error = 'Enter your password.');
     setState(() {
-      _busy = true;
+      _emailError = looksLikeEmail(email)
+          ? null
+          : 'Enter a valid email address.';
+      _passwordError = password.isEmpty ? 'Enter your password.' : null;
       _error = null;
       _unconfirmed = false;
     });
+    if (_emailError != null || _passwordError != null) return;
+    setState(() => _busy = true);
     try {
       await sb.auth.signInWithPassword(email: email, password: password);
     } catch (e) {
@@ -58,32 +62,44 @@ class _SignInPageState extends State<SignInPage> {
 
   @override
   Widget build(BuildContext context) => FormScaffold(
-    topPadding: 72,
+    picture: Image.asset(
+      'assets/icon.png',
+      width: 80,
+      height: 80,
+      filterQuality: FilterQuality.medium,
+      excludeFromSemantics: true,
+    ),
+    heading: 'Welcome to Texture',
+    subtitle: 'Sign in to send photos to Texture on your computer.',
     children: [
-      Text(
-        'Welcome to Texture',
-        style: Theme.of(context).textTheme.headlineSmall,
-        textAlign: TextAlign.center,
-      ),
-      const SizedBox(height: 8),
-      Text(
-        'Sign in with the same account you use in the Texture desktop app '
-        'so your photos arrive in its inbox.',
-        style: Theme.of(context).textTheme.bodyMedium,
-        textAlign: TextAlign.center,
-      ),
-      const SizedBox(height: 32),
-      TextField(
+      EmailField(
         controller: _email,
-        keyboardType: TextInputType.emailAddress,
-        textInputAction: TextInputAction.next,
-        autofillHints: const [AutofillHints.email],
-        decoration: const InputDecoration(labelText: 'Email'),
+        errorText: _emailError,
+        onChanged: (_) => setState(() {
+          _emailError = null;
+          _error = null;
+          _unconfirmed = false;
+        }),
       ),
+      const SizedBox(height: fieldGap),
       PasswordField(
         controller: _password,
         textInputAction: TextInputAction.done,
         onSubmitted: _submit,
+        errorText: _passwordError,
+        onChanged: (_) => setState(() {
+          _passwordError = null;
+          _error = null;
+          _unconfirmed = false;
+        }),
+      ),
+      Align(
+        alignment: Alignment.centerRight,
+        child: TextButton(
+          onPressed: () =>
+              _push(ForgotPasswordPage(initialEmail: _email.text.trim())),
+          child: const Text('Forgot password?'),
+        ),
       ),
       ErrorText(_error),
       if (_unconfirmed)
@@ -94,16 +110,19 @@ class _SignInPageState extends State<SignInPage> {
             child: const Text('Resend confirmation email'),
           ),
         ),
-      const SizedBox(height: 16),
+      const SizedBox(height: fieldGap),
       LoadingButton(label: 'Sign in', onPressed: _submit, busy: _busy),
-      TextButton(
-        onPressed: () =>
-            _push(ForgotPasswordPage(initialEmail: _email.text.trim())),
-        child: const Text('Forgot password?'),
-      ),
-      TextButton(
-        onPressed: () => _push(const SignUpPage()),
-        child: const Text('Create account'),
+      const SizedBox(height: 24),
+      Wrap(
+        alignment: WrapAlignment.center,
+        crossAxisAlignment: WrapCrossAlignment.center,
+        children: [
+          const Text('New to Texture?'),
+          TextButton(
+            onPressed: () => _push(const SignUpPage()),
+            child: const Text('Create account'),
+          ),
+        ],
       ),
     ],
   );
@@ -122,6 +141,7 @@ class _SignUpPageState extends State<SignUpPage> {
   final _confirm = TextEditingController();
   bool _busy = false;
   bool _submitted = false;
+  String? _emailError;
   String? _error;
 
   @override
@@ -132,33 +152,18 @@ class _SignUpPageState extends State<SignUpPage> {
     super.dispose();
   }
 
-  String? get _emailError {
-    final v = _email.text.trim();
-    return _submitted && !looksLikeEmail(v)
-        ? 'Enter a valid email address.'
-        : null;
-  }
-
-  String? get _passwordError =>
-      _submitted && _password.text.length < minPasswordLength
-      ? 'Use at least $minPasswordLength characters.'
-      : null;
-
-  // Shown as soon as the user has typed in the confirm field, not only after submit.
-  String? get _confirmError =>
-      (_submitted || _confirm.text.isNotEmpty) &&
-          _confirm.text != _password.text
-      ? 'Passwords do not match.'
-      : null;
-
   Future<void> _submit() async {
-    setState(() => _submitted = true);
-    if (_emailError != null || _passwordError != null || _confirmError != null)
-      return;
+    if (_busy) return;
+    final emailOk = looksLikeEmail(_email.text.trim());
     setState(() {
-      _busy = true;
+      _submitted = true;
+      _emailError = emailOk ? null : 'Enter a valid email address.';
       _error = null;
     });
+    if (!emailOk || !NewPasswordFields.valid(_password.text, _confirm.text)) {
+      return;
+    }
+    setState(() => _busy = true);
     final email = _email.text.trim();
     try {
       final res = await sb.auth.signUp(
@@ -188,33 +193,28 @@ class _SignUpPageState extends State<SignUpPage> {
 
   @override
   Widget build(BuildContext context) => FormScaffold(
-    title: 'Create account',
+    heading: 'Create account',
+    subtitle: 'You\'ll use this on your computer too.',
     children: [
-      TextField(
+      EmailField(
         controller: _email,
-        keyboardType: TextInputType.emailAddress,
-        textInputAction: TextInputAction.next,
         autofillHints: const [AutofillHints.newUsername, AutofillHints.email],
-        onChanged: (_) => setState(() {}),
-        decoration: InputDecoration(labelText: 'Email', errorText: _emailError),
+        errorText: _emailError,
+        onChanged: (_) => setState(() {
+          _emailError = null;
+          _error = null;
+        }),
       ),
-      PasswordField(
-        controller: _password,
-        autofillHints: const [AutofillHints.newPassword],
-        errorText: _passwordError,
-        onChanged: (_) => setState(() {}),
-      ),
-      PasswordField(
-        controller: _confirm,
-        label: 'Confirm password',
-        autofillHints: const [AutofillHints.newPassword],
-        textInputAction: TextInputAction.done,
+      const SizedBox(height: fieldGap),
+      NewPasswordFields(
+        password: _password,
+        confirm: _confirm,
+        submitted: _submitted,
         onSubmitted: _submit,
-        errorText: _confirmError,
-        onChanged: (_) => setState(() {}),
+        onChanged: () => setState(() => _error = null),
       ),
       ErrorText(_error),
-      const SizedBox(height: 16),
+      const SizedBox(height: 24),
       LoadingButton(label: 'Create account', onPressed: _submit, busy: _busy),
     ],
   );
@@ -294,15 +294,13 @@ class _CheckEmailPageState extends State<CheckEmailPage> {
   Widget build(BuildContext context) {
     final theme = Theme.of(context);
     return FormScaffold(
-      title: 'Check your email',
-      topPadding: 48,
+      picture: Icon(
+        Icons.mark_email_unread_outlined,
+        size: 64,
+        color: theme.colorScheme.primary,
+      ),
+      heading: 'Check your email',
       children: [
-        Icon(
-          Icons.mark_email_unread_outlined,
-          size: 64,
-          color: theme.colorScheme.primary,
-        ),
-        const SizedBox(height: 24),
         Text(
           widget.afterSignUp
               ? 'We sent a link to ${widget.email}.'
@@ -355,6 +353,7 @@ class _ForgotPasswordPageState extends State<ForgotPasswordPage> {
   late final _email = TextEditingController(text: widget.initialEmail);
   bool _busy = false;
   bool _sent = false;
+  String? _emailError;
   String? _error;
 
   @override
@@ -364,11 +363,14 @@ class _ForgotPasswordPageState extends State<ForgotPasswordPage> {
   }
 
   Future<void> _submit() async {
+    if (_busy) return;
     final email = _email.text.trim();
-    if (!looksLikeEmail(email))
-      return setState(() => _error = 'Enter a valid email address.');
+    if (!looksLikeEmail(email)) {
+      return setState(() => _emailError = 'Enter a valid email address.');
+    }
     setState(() {
       _busy = true;
+      _emailError = null;
       _error = null;
     });
     try {
@@ -383,10 +385,12 @@ class _ForgotPasswordPageState extends State<ForgotPasswordPage> {
 
   @override
   Widget build(BuildContext context) => FormScaffold(
-    title: 'Reset password',
+    heading: 'Reset password',
+    subtitle: _sent
+        ? null
+        : 'Enter your email and we\'ll send a link to choose a new password.',
     children: _sent
         ? [
-            const SizedBox(height: 24),
             Text(
               'If ${_email.text.trim()} has an account, a reset link is on its way. '
               'Open it $openLinkWhere.',
@@ -400,20 +404,18 @@ class _ForgotPasswordPageState extends State<ForgotPasswordPage> {
             ),
           ]
         : [
-            const Text(
-              'Enter your email and we\'ll send a link to choose a new password.',
-            ),
-            const SizedBox(height: 8),
-            TextField(
+            EmailField(
               controller: _email,
-              keyboardType: TextInputType.emailAddress,
               textInputAction: TextInputAction.done,
-              autofillHints: const [AutofillHints.email],
-              onSubmitted: (_) => _submit(),
-              decoration: const InputDecoration(labelText: 'Email'),
+              errorText: _emailError,
+              onChanged: (_) => setState(() {
+                _emailError = null;
+                _error = null;
+              }),
+              onSubmitted: _submit,
             ),
             ErrorText(_error),
-            const SizedBox(height: 16),
+            const SizedBox(height: 24),
             LoadingButton(
               label: 'Send reset link',
               onPressed: _submit,
@@ -435,6 +437,7 @@ class _SetNewPasswordPageState extends State<SetNewPasswordPage> {
   final _password = TextEditingController();
   final _confirm = TextEditingController();
   bool _busy = false;
+  bool _submitted = false;
   String? _error;
 
   @override
@@ -445,17 +448,13 @@ class _SetNewPasswordPageState extends State<SetNewPasswordPage> {
   }
 
   Future<void> _submit() async {
-    if (_password.text.length < minPasswordLength) {
-      return setState(
-        () => _error = 'Use at least $minPasswordLength characters.',
-      );
-    }
-    if (_password.text != _confirm.text)
-      return setState(() => _error = 'Passwords do not match.');
+    if (_busy) return;
     setState(() {
-      _busy = true;
+      _submitted = true;
       _error = null;
     });
+    if (!NewPasswordFields.valid(_password.text, _confirm.text)) return;
+    setState(() => _busy = true);
     try {
       await sb.auth.updateUser(UserAttributes(password: _password.text));
       if (!mounted) return;
@@ -471,22 +470,19 @@ class _SetNewPasswordPageState extends State<SetNewPasswordPage> {
 
   @override
   Widget build(BuildContext context) => FormScaffold(
-    title: 'Choose a new password',
+    heading: 'Choose a new password',
     children: [
-      PasswordField(
-        controller: _password,
-        label: 'New password',
-        autofillHints: const [AutofillHints.newPassword],
-      ),
-      PasswordField(
-        controller: _confirm,
-        label: 'Confirm new password',
-        autofillHints: const [AutofillHints.newPassword],
-        textInputAction: TextInputAction.done,
+      NewPasswordFields(
+        password: _password,
+        confirm: _confirm,
+        submitted: _submitted,
         onSubmitted: _submit,
+        onChanged: () => setState(() => _error = null),
+        passwordLabel: 'New password',
+        confirmLabel: 'Confirm new password',
       ),
       ErrorText(_error),
-      const SizedBox(height: 16),
+      const SizedBox(height: 24),
       LoadingButton(label: 'Update password', onPressed: _submit, busy: _busy),
     ],
   );

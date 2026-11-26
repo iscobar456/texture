@@ -170,7 +170,7 @@ export function initInbox(deps: InboxDeps) {
         if (p) schedule(async () => { try { img.src = await thumbUrl(p); img.parentElement?.classList.remove("loading"); } catch { img.parentElement?.classList.add("failed"); } });
       }
     },
-    { root: $("inbox"), rootMargin: "240px" },
+    { root: list, rootMargin: "240px" },
   );
 
   const findPhoto = (id: string) => [...lists.pending, ...lists.used, ...lists.trash].find((p) => p.id === id);
@@ -333,20 +333,19 @@ export function initInbox(deps: InboxDeps) {
   function startReorder(el: HTMLElement, id: string, grip: HTMLElement, e: PointerEvent) {
     e.preventDefault();
     grip.setPointerCapture(e.pointerId);
-    const box = $("inbox");
     const y0 = e.clientY;
-    const scroll0 = box.scrollTop;
+    const scroll0 = list.scrollTop;
     let y = y0;
     el.draggable = false; // the whole card is draggable into the editor; not while it is being reordered
     el.classList.add("dragging");
     const place = () => {
-      el.style.transform = `translateY(${y - y0 + box.scrollTop - scroll0}px)`;
+      el.style.transform = `translateY(${y - y0 + list.scrollTop - scroll0}px)`;
       showDrop(dropIndex(y, el), el);
     };
     const timer = setInterval(() => {
-      const edge = box.getBoundingClientRect();
-      if (y < edge.top + 48) box.scrollBy(0, -12);
-      else if (y > edge.bottom - 48) box.scrollBy(0, 12);
+      const edge = list.getBoundingClientRect();
+      if (y < edge.top + 48) list.scrollBy(0, -12);
+      else if (y > edge.bottom - 48) list.scrollBy(0, 12);
       place();
     }, 30);
     const move = (ev: PointerEvent) => { y = ev.clientY; place(); };
@@ -595,7 +594,7 @@ export function initInbox(deps: InboxDeps) {
     selecting = null; // a selection belongs to one list
     selected.clear();
     render();
-    $("inbox").scrollTop = 0;
+    list.scrollTop = 0;
   }
 
   const EMPTY_ICON = '<svg class="inbox-empty-icon" viewBox="0 0 16 16" width="28" height="28" aria-hidden="true"><rect x="2" y="2.5" width="12" height="11" rx="2" fill="none" stroke="currentColor" stroke-width="1.4"/><circle cx="5.8" cy="6.2" r="1.1" fill="currentColor"/><path d="M2.6 11.6l3.1-3 2.6 2.4 2-1.8 3.1 2.8" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linecap="round" stroke-linejoin="round"/></svg>';

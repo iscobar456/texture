@@ -79,6 +79,21 @@ export const withTimeout = (base: typeof fetch, ms = RESPONSE_TIMEOUT_MS): typeo
     .finally(() => clearTimeout(timer));
 };
 
+/**
+ * Refuses data requests that would go out without a signed-in user. When the access token cannot be renewed (offline,
+ * or the auth server unreachable), supabase-js sends them with the anonymous key instead, and row-level security then
+ * answers with empty lists rather than an error: sync would take that for an account holding nothing. Failing like a
+ * network error keeps everything queued until the token is renewed. Sign-in requests (`/auth/`) pass.
+ */
+export const signedInOnly = (base: typeof fetch, anonKey: string): typeof fetch => async (input, init) => {
+  const { pathname } = new URL(input instanceof Request ? input.url : String(input));
+  const auth = new Headers(init?.headers).get("authorization");
+  if (/^\/(rest|storage)\//.test(pathname) && (!auth || auth === `Bearer ${anonKey}`)) {
+    throw new TypeError("Can't reach your account right now");
+  }
+  return base(input, init);
+};
+
 export type ApiOptions = {
   /**
    * The HTTP transport. Defaults to the global `fetch`. The desktop passes one that runs in Rust, because the webview's
@@ -107,7 +122,25 @@ export async function fetchAll<T>(
 
 export function createApi(url: string, anonKey: string, opts: ApiOptions = {}) {
   const base = opts.fetch ?? ((input, init) => fetch(input, init));
-  const sb: SupabaseClient = createClient(url, anonKey, { global: { fetch: withTimeout(base) } });
+  /** Where the session is kept in `localStorage`: the library's default name, spelled out so `storedUser` can read it. */
+  const storageKey = `sb-${new URL(url).hostname.split(".")[0]}-auth-token`;
+  const sb: SupabaseClient = createClient(url, anonKey, {
+    auth: { storageKey },
+    global: { fetch: signedInOnly(withTimeout(base), anonKey) },
+  });
+  /**
+   * Who is signed in on this device, read straight from storage. Unlike `getSession` it never waits for, or fails with,
+   * a token refresh, so it answers at once and offline. A session the server has since revoked still shows here until
+   * the refresh is rejected, which signs out (`SIGNED_OUT`).
+   */
+  const storedUser = (): { id: string; email?: string } | null => {
+    try {
+      const s = JSON.parse(localStorage.getItem(storageKey) ?? "null");
+      return s?.refresh_token && s.user?.id ? { id: s.user.id, email: s.user.email } : null;
+    } catch {
+      return null;
+    }
+  };
   /** "<uid>/<id>/preview.png", or "<uid>/.templates/<id>/preview.png" (ids never start with '.'). */
   const previewKey = async (kind: "document" | "template", id: string) => {
     const uid = (await sb.auth.getSession()).data.session?.user.id;
@@ -137,6 +170,12 @@ export function createApi(url: string, anonKey: string, opts: ApiOptions = {}) {
   };
   return {
     sb,
+    storedUser,
+    /** Signs out, offline too: with an expired token the library gives up there and would keep the session. */
+    async signOut() {
+      const { error } = await sb.auth.signOut();
+      if (error && storedUser()) localStorage.removeItem(storageKey);
+    },
     /** Waiting in the inbox, newest first. */
     async listPending(): Promise<Photo[]> {
       const { data, error } = await sb.from("photos").select("*").eq("status", "pending").order("created_at", { ascending: false });

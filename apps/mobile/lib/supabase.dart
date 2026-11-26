@@ -15,5 +15,6 @@ String get authRedirect => kIsWeb
 /// on the web, in this browser's storage), so another browser can't finish the sign-in.
 const openLinkWhere = kIsWeb ? 'in this browser' : 'on this phone';
 
-/// Supabase's default minimum; raise it here if the project setting is raised.
-const minPasswordLength = 6;
+/// For new passwords. Keep in step with the desktop's check (`initAuth` in main.ts) and the
+/// Supabase project's minimum (Authentication settings in the dashboard).
+const minPasswordLength = 8;

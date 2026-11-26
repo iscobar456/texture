@@ -85,7 +85,7 @@ class _DeleteAccountDialogState extends State<_DeleteAccountDialog> {
 
   Future<void> _delete() async {
     final email = sb.auth.currentUser?.email;
-    if (email == null || _password.text.isEmpty) return;
+    if (_busy || email == null || _password.text.isEmpty) return;
     setState(() {
       _busy = true;
       _error = null;
@@ -137,6 +137,7 @@ class _DeleteAccountDialogState extends State<_DeleteAccountDialog> {
             controller: _password,
             textInputAction: TextInputAction.done,
             onSubmitted: _busy ? null : _delete,
+            onChanged: (_) => setState(() => _error = null),
           ),
           ErrorText(_error),
         ],

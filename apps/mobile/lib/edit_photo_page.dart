@@ -4,6 +4,8 @@ import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
 import 'package:image/image.dart' as img;
 
+import 'theme.dart';
+
 /// Longest side after editing. Plenty for LaTeX figures and OCR (the desktop
 /// downsizes to 1568px for OCR) while keeping uploads and decoding quick.
 const _maxSide = 3000;
@@ -74,11 +76,13 @@ class _EditPhotoPageState extends State<EditPhotoPage> {
   @override
   void initState() {
     super.initState();
-    _prepare(widget.bytes).then((p) {
-      if (mounted) setState(() => _src = p);
-    }).catchError((Object e) {
-      if (mounted) setState(() => _error = e);
-    });
+    _prepare(widget.bytes)
+        .then((p) {
+          if (mounted) setState(() => _src = p);
+        })
+        .catchError((Object e) {
+          if (mounted) setState(() => _error = e);
+        });
   }
 
   void _rotate() {
@@ -107,72 +111,75 @@ class _EditPhotoPageState extends State<EditPhotoPage> {
   @override
   Widget build(BuildContext context) {
     final src = _src;
-    final changed =
-        _turns != 0 || _crop != const Rect.fromLTRB(0, 0, 1, 1);
-    return Scaffold(
-      backgroundColor: Colors.black,
-      appBar: AppBar(
+    final changed = _turns != 0 || _crop != const Rect.fromLTRB(0, 0, 1, 1);
+    // Black in both modes, so the buttons need the dark theme's lighter accent.
+    return Theme(
+      data: textureTheme(Brightness.dark),
+      child: Scaffold(
         backgroundColor: Colors.black,
-        foregroundColor: Colors.white,
-        title: const Text('Adjust photo'),
-        actions: [
-          TextButton(
-            onPressed: src == null || _busy ? null : _done,
-            child: const Text('Send'),
-          ),
-        ],
-      ),
-      body: _error != null
-          ? Center(
-              child: Text(
-                'Could not open this photo.',
-                style: const TextStyle(color: Colors.white),
-              ),
-            )
-          : src == null || _busy
-          ? const Center(child: CircularProgressIndicator())
-          : Column(
-              children: [
-                Expanded(
-                  child: _CropArea(
-                    bytes: src.bytes,
-                    aspect: _turns.isOdd
-                        ? src.height / src.width
-                        : src.width / src.height,
-                    turns: _turns,
-                    srcWide: src.width >= src.height,
-                    crop: _crop,
-                    onChanged: (r) => setState(() => _crop = r),
-                  ),
+        appBar: AppBar(
+          backgroundColor: Colors.black,
+          foregroundColor: Colors.white,
+          title: const Text('Adjust photo'),
+          actions: [
+            TextButton(
+              onPressed: src == null || _busy ? null : _done,
+              child: const Text('Send'),
+            ),
+          ],
+        ),
+        body: _error != null
+            ? Center(
+                child: Text(
+                  'Could not open this photo.',
+                  style: const TextStyle(color: Colors.white),
                 ),
-                SafeArea(
-                  top: false,
-                  child: Padding(
-                    padding: const EdgeInsets.symmetric(vertical: 8),
-                    child: Row(
-                      mainAxisAlignment: MainAxisAlignment.spaceEvenly,
-                      children: [
-                        TextButton.icon(
-                          onPressed: _rotate,
-                          icon: const Icon(Icons.rotate_right),
-                          label: const Text('Rotate'),
-                        ),
-                        TextButton.icon(
-                          onPressed: changed
-                              ? () => setState(() {
-                                  _turns = 0;
-                                  _crop = const Rect.fromLTRB(0, 0, 1, 1);
-                                })
-                              : null,
-                          icon: const Icon(Icons.restart_alt),
-                          label: const Text('Reset'),
-                        ),
-                      ],
+              )
+            : src == null || _busy
+            ? const Center(child: CircularProgressIndicator())
+            : Column(
+                children: [
+                  Expanded(
+                    child: _CropArea(
+                      bytes: src.bytes,
+                      aspect: _turns.isOdd
+                          ? src.height / src.width
+                          : src.width / src.height,
+                      turns: _turns,
+                      srcWide: src.width >= src.height,
+                      crop: _crop,
+                      onChanged: (r) => setState(() => _crop = r),
                     ),
                   ),
-                ),
-              ],
-            ),
+                  SafeArea(
+                    top: false,
+                    child: Padding(
+                      padding: const EdgeInsets.symmetric(vertical: 8),
+                      child: Row(
+                        mainAxisAlignment: MainAxisAlignment.spaceEvenly,
+                        children: [
+                          TextButton.icon(
+                            onPressed: _rotate,
+                            icon: const Icon(Icons.rotate_right),
+                            label: const Text('Rotate'),
+                          ),
+                          TextButton.icon(
+                            onPressed: changed
+                                ? () => setState(() {
+                                    _turns = 0;
+                                    _crop = const Rect.fromLTRB(0, 0, 1, 1);
+                                  })
+                                : null,
+                            icon: const Icon(Icons.restart_alt),
+                            label: const Text('Reset'),
+                          ),
+                        ],
+                      ),
+                    ),
+                  ),
+                ],
+              ),
+      ),
     );
   }
 }
@@ -325,9 +332,7 @@ class _CropAreaState extends State<_CropArea> {
                 ),
               ),
               Positioned.fill(
-                child: CustomPaint(
-                  painter: _CropPainter(_px(_crop), _box),
-                ),
+                child: CustomPaint(painter: _CropPainter(_px(_crop), _box)),
               ),
             ],
           ),

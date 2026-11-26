@@ -33,7 +33,9 @@ main > * { min-height: 0; overflow: auto; border-right: 1px solid #8884; }
 #preview { background: #8882; padding: 8px; }
 #pages canvas { display: block; width: 100%; margin: 0 auto 8px; box-shadow: 0 1px 4px #0004; background: white; }
 #log { white-space: pre-wrap; color: var(--danger); font-size: .8em; }
-#inbox { padding: 8px; border-right: none; }
+/* the head and tabs stay put and only the list under them scrolls, so no card ever shows around the tabs */
+#inbox { display: flex; flex-direction: column; padding: 8px 0 0; overflow: hidden; border-right: none; }
+#inbox-list { flex: 1; min-height: 0; overflow: auto; padding: 10px 8px 0; }
 
 /* Colors. A theme (data-palette) has a light and a dark palette; data-theme on <html> picks one (settings.ts sets it,
    resolving "Match system"). Each palette colors the editor (--cm-*) and the window: --bg (chrome), --fg (text),
@@ -314,32 +316,25 @@ kbd { display: inline-block; padding: 0 6px; border: 1px solid #8886; border-bot
 /* pane layout */
 .splitter { overflow: visible; border-right: none; cursor: col-resize; position: relative; background: #8883; transition: background .1s; }
 .splitter:hover, .splitter:focus-visible, .splitter.dragging { background: var(--accent); outline: none; }
-.inbox-head { position: relative; display: flex; align-items: center; margin-bottom: 8px; }
-/* sits over the toggle's right end, just left of its chevron (the badge steps aside) */
-#inbox-refresh { position: absolute; top: 0; right: 22px; }
-.inbox-toggle .badge { margin-right: calc(var(--ctl-h) - 6px); }
+.inbox-head { position: relative; display: flex; align-items: center; gap: 2px; margin: 0 8px 8px; }
+.inbox-head > .inbox-icon { flex: none; margin-left: 6px; opacity: .65; }
+.inbox-head > .label { flex: 1; min-width: 0; margin-left: 6px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-weight: 500; opacity: .85; }
+.inbox-head > .badge { margin-right: 4px; }
+#inbox-toggle .inbox-icon { display: none; }
 #inbox-refresh svg { transform-origin: center; }
 #inbox-refresh.spinning svg { animation: inbox-spin .8s linear infinite; }
 @keyframes inbox-spin { to { transform: rotate(360deg); } }
-.inbox-toggle { position: relative; display: flex; align-items: center; gap: 8px; flex: 1; min-width: 0; height: var(--ctl-h); padding: 0 6px; border: none;
-  background: none; font: inherit; font-weight: 500; color: inherit; cursor: pointer; border-radius: var(--radius); }
-.inbox-toggle:hover { background: var(--hover); }
-.inbox-toggle:focus-visible { outline: 2px solid var(--accent); outline-offset: -2px; }
-.inbox-toggle .label { flex: 1; text-align: left; opacity: .85; }
-.inbox-toggle svg { flex: none; opacity: .65; }
-.inbox-toggle:hover svg { opacity: 1; }
-.inbox-toggle .chev { transition: transform .15s; }
-.inbox-toggle[aria-expanded="false"] .chev { display: none; }
 .badge { min-width: 1.4em; padding: 0 6px; border-radius: 999px; background: var(--accent); color: var(--on-accent); font-size: .8em;
   font-weight: 600; text-align: center; }
 #inbox.collapsed { padding: 8px 4px; overflow: hidden; }
 #inbox.collapsed #inbox-list { display: none; }
 #inbox.collapsed .inbox-head { margin: 0; }
 #inbox.collapsed #inbox-refresh { display: none; }
-#inbox.collapsed .inbox-toggle { justify-content: center; padding: 0; }
-#inbox.collapsed .inbox-toggle .label { display: none; }
-#inbox.collapsed .inbox-toggle svg { opacity: .85; }
-#inbox.collapsed .badge { margin-right: 0; position: absolute; top: -2px; right: -2px; min-width: 1.5em; padding: 0 4px; font-size: .7em; line-height: 1.5; }
+#inbox.collapsed .inbox-head > .inbox-icon, #inbox.collapsed .inbox-head > .label, #inbox.collapsed #inbox-chevron { display: none; }
+#inbox.collapsed #inbox-toggle { width: 100%; }
+#inbox.collapsed #inbox-toggle .inbox-icon { display: block; }
+/* on the icon's corner, above the button, and clicks pass through to it */
+#inbox.collapsed .badge { margin: 0; position: absolute; z-index: 1; top: -2px; right: -2px; min-width: 1.5em; padding: 0 4px; font-size: .7em; line-height: 1.5; pointer-events: none; }
 
 /* pin each pane to its column, so the grid does not reshuffle when the preview is taken out of flow (full screen) */
 #editor { grid-column: 1; grid-row: 1; }
@@ -626,7 +621,7 @@ dialog .row button[value="ok"], dialog .row button.primary, #set-ocr-save, .dlg-
 .obi textarea { min-height: 150px; resize: vertical; padding: 8px 10px; font-family: ui-monospace, monospace; line-height: 1.45; white-space: pre; overflow: auto; }
 
 /* Inbox / Used / Trash tabs */
-#inbox-tabs { position: sticky; top: 0; z-index: 3; display: flex; gap: 2px; padding: 2px 0 8px; margin-bottom: 2px; background: var(--bg); }
+#inbox-tabs { display: flex; gap: 2px; padding: 2px 8px 0; border-bottom: 1px solid var(--border); }
 .inbox-tab { flex: 1; min-width: 0; display: flex; align-items: center; justify-content: center; gap: 5px; height: var(--ctl-h); padding: 0 4px;
   border: none; border-bottom: 2px solid transparent; border-radius: var(--radius) var(--radius) 0 0; background: none; color: inherit; cursor: pointer; opacity: .7; }
 .inbox-tab:hover { opacity: 1; background: var(--hover); }

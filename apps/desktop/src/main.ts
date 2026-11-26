@@ -737,7 +737,7 @@ $("settings-reset").addEventListener("click", () => {
 
 $("open-settings").addEventListener("click", async () => {
   showSettings();
-  const email = (await api.sb.auth.getSession()).data.session?.user.email;
+  const email = api.storedUser()?.email;
   $("set-account").textContent = email ? `Signed in as ${email}` : "";
   ocrKeyUi.reset();
   $<HTMLDialogElement>("settings-dialog").showModal();
@@ -760,7 +760,7 @@ $("delete-account-form").addEventListener("submit", async (e) => {
   buttons.forEach((b) => (b.disabled = true));
   submitter.textContent = "Deleting…";
   try {
-    const email = (await api.sb.auth.getSession()).data.session?.user.email;
+    const email = api.storedUser()?.email;
     if (!email) throw new Error("Not signed in");
     // Re-checking the password keeps an unattended, signed-in computer from losing the account to one click.
     const check = await api.sb.auth.signInWithPassword({ email, password: $<HTMLInputElement>("delete-account-password").value });
@@ -1613,6 +1613,7 @@ async function initAuth() {
   const key = import.meta.env.VITE_SUPABASE_ANON_KEY as string | undefined;
   const msg = $("auth-msg");
   if (!url || !key) {
+    $("auth").hidden = false;
     msg.textContent = "Set VITE_SUPABASE_URL and VITE_SUPABASE_ANON_KEY in apps/desktop/.env";
     $("login").querySelectorAll("input,button").forEach((el) => ((el as HTMLInputElement).disabled = true));
     return;
@@ -1625,7 +1626,8 @@ async function initAuth() {
 
   $("sign-out").addEventListener("click", async () => {
     await flushSave();
-    await api.sb.auth.signOut();
+    await api.signOut();
+    location.reload();
   });
 
   // One form, three modes. Email links (confirm, reset) return to the phone app's scheme: it is the only redirect
@@ -1669,7 +1671,7 @@ async function initAuth() {
         if (error || !data.user) msg.textContent = error?.message ?? "Sign-in failed";
         else await start(data.user.id);
       } else if (mode === "signup") {
-        if (password.value.length < 6) return void (msg.textContent = "Use a password of at least 6 characters.");
+        if (password.value.length < 8) return void (msg.textContent = "Use a password of at least 8 characters.");
         if (password.value !== password2.value) return void (msg.textContent = "The two passwords don't match.");
         msg.textContent = "Creating your account…";
         const { data, error } = await api.sb.auth.signUp({
@@ -1691,9 +1693,11 @@ async function initAuth() {
     }
   });
 
-  // The session is persisted, so a returning user is signed in even when offline.
-  const { data } = await api.sb.auth.getSession();
-  if (data.session) await start(data.session.user.id);
+  // A returning user goes straight in, offline too: the stored session says who they are, and its token is renewed
+  // behind the scenes. The sign-in screen starts hidden so it never flashes up for them.
+  const known = api.storedUser();
+  if (known) await start(known.id);
+  else $("auth").hidden = false;
 }
 
 void initAuth();
