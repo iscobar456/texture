@@ -1,0 +1,91 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Texture</title>
+  <meta name="description" content="Write homework in LaTeX on your computer and add photos of paper work from your phone. Downloads for Linux, macOS, Windows and Android.">
+  <link rel="icon" href="icon.svg" type="image/svg+xml">
+  <link rel="apple-touch-icon" href="icon.png">
+  <link rel="stylesheet" href="style.css">
+</head>
+<body>
+  <header class="site">
+    <div class="wrap">
+      <a class="brand" href="./"><img src="icon.svg" alt="" width="30" height="30">Texture</a>
+      <nav class="site" aria-label="Site">
+        <a href="./" aria-current="page">Download</a>
+        <a href="support.html">Support</a>
+        <a href="privacy.html">Privacy</a>
+      </nav>
+    </div>
+  </header>
+
+  <main class="wrap">
+    <section class="hero">
+      <img src="icon.svg" alt="" width="88" height="88">
+      <div>
+        <h1>Texture</h1>
+        <p>Write homework in LaTeX on your computer. Add photos of your paper or whiteboard work from your phone.</p>
+      </div>
+    </section>
+
+    <h2>How it works</h2>
+    <ol class="steps">
+      <li>Write your assignment in the desktop app, with a live PDF preview.</li>
+      <li>Photograph handwritten work with the phone app. It lands in the desktop's photo inbox.</li>
+      <li>Insert the photo as a figure, or transcribe it to LaTeX with your own Anthropic API key, then export the PDF.</li>
+    </ol>
+
+    <h2 id="download">Download</h2>
+    <p class="muted">Latest version: <span id="latest-version">see releases</span>. Free and open source.</p>
+
+    <h3>Desktop</h3>
+    <div class="downloads">
+      <a class="dl" data-os="mac" data-asset="_aarch64\.dmg$" href="https://github.com/iscobar456/texture/releases/latest">
+        <strong>macOS (Apple silicon)</strong><span>M1 and newer · .dmg</span></a>
+      <a class="dl" data-asset="_x64\.dmg$" href="https://github.com/iscobar456/texture/releases/latest">
+        <strong>macOS (Intel)</strong><span>.dmg</span></a>
+      <a class="dl" data-os="windows" data-asset="-setup\.exe$" href="https://github.com/iscobar456/texture/releases/latest">
+        <strong>Windows</strong><span>Installer · .exe</span></a>
+      <a class="dl" data-os="linux" data-asset="\.AppImage$" href="https://github.com/iscobar456/texture/releases/latest">
+        <strong>Linux AppImage</strong><span>Any distribution</span></a>
+      <a class="dl" data-asset="\.deb$" href="https://github.com/iscobar456/texture/releases/latest">
+        <strong>Linux .deb</strong><span>Debian, Ubuntu</span></a>
+      <a class="dl" data-asset="\.rpm$" href="https://github.com/iscobar456/texture/releases/latest">
+        <strong>Linux .rpm</strong><span>Fedora, openSUSE</span></a>
+    </div>
+
+    <h3>Phone</h3>
+    <div class="downloads">
+      <a class="dl" data-os="android" data-asset="\.apk$" href="https://github.com/iscobar456/texture/releases/latest">
+        <strong>Android</strong><span>.apk</span></a>
+      <div class="dl soon" data-os="ios">
+        <strong>iPhone</strong><span>Coming to the App Store</span></div>
+    </div>
+    <p class="small muted">
+      Installing the Android .apk directly needs "Install unknown apps" allowed for your browser.
+      If macOS says the app can't be opened, see <a href="support.html#macos">Support</a>.
+      Every version is on <a href="https://github.com/iscobar456/texture/releases">GitHub Releases</a>.
+    </p>
+
+    <div class="note">
+      <p>You need a free Texture account, created in either app. Your documents are saved on your computer and backed up to your account so a new device gets everything back. Read the <a href="privacy.html">privacy policy</a>.</p>
+    </div>
+  </main>
+
+  <footer class="site">
+    <div class="wrap">
+      <nav aria-label="Footer">
+        <a href="privacy.html">Privacy policy</a>
+        <a href="terms.html">Terms of use</a>
+        <a href="support.html">Support</a>
+        <a href="delete-account.html">Delete your account</a>
+        <a href="https://github.com/iscobar456/texture">Source code</a>
+      </nav>
+      <div>Texture is made by Isaac Spencer · <a href="mailto:support@texture.isaacspencer.com">support@texture.isaacspencer.com</a></div>
+    </div>
+  </footer>
+  <script src="downloads.js" defer></script>
+</body>
+</html>
