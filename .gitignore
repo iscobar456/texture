@@ -18,3 +18,6 @@ key.properties
 
 # macOS
 .DS_Store
+
+# raw screenshots handed over for the website; site/shots/ holds the processed copies
+site/screenshots-raw/

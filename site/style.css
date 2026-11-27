@@ -44,7 +44,7 @@ nav.site { display: flex; gap: 18px; flex-wrap: wrap; font-size: 15px; }
 nav.site a { color: var(--muted); text-decoration: none; }
 nav.site a:hover, nav.site a[aria-current="page"] { color: var(--fg); }
 
-main.wrap { padding-top: 40px; padding-bottom: 56px; }
+main.wrap, main.home, main.tour { padding-top: 40px; padding-bottom: 56px; }
 h1 { font-size: 2rem; line-height: 1.2; margin: 0 0 12px; letter-spacing: -0.01em; }
 h2 { font-size: 1.3rem; line-height: 1.3; margin: 36px 0 10px; }
 h3 { font-size: 1.05rem; margin: 22px 0 6px; }
@@ -97,3 +97,21 @@ li { margin: 4px 0; }
 footer.site { border-top: 1px solid var(--border); padding: 22px 0 34px; font-size: 14px; color: var(--muted); }
 footer.site nav { display: flex; gap: 16px; flex-wrap: wrap; margin-bottom: 6px; }
 footer.site a { color: var(--muted); }
+
+/* tour page and screenshots */
+.wide { max-width: 1100px; margin: 18px auto 0; padding: 0 16px; }
+.shot { display: block; border-radius: 10px; overflow: hidden; border: 1px solid var(--border);
+  box-shadow: 0 10px 30px -12px rgb(0 0 0 / .35); background: #1c1d20; }
+.shot img { display: block; width: 100%; height: auto; }
+.shot:focus-visible { outline: 2px solid var(--accent); outline-offset: 3px; }
+.phones { display: flex; justify-content: center; gap: clamp(12px, 4vw, 40px); margin: 18px auto 0; padding: 0 16px; }
+.shot.phone { width: min(270px, 44vw); border-radius: 22px; }
+.tour-item { margin: 0 0 64px; }
+.tour-item h2 { margin-top: 0; }
+.tour h1 + .lede { margin-bottom: 44px; }
+.button { display: inline-block; padding: 10px 20px; border-radius: 10px; background: var(--accent); color: var(--on-accent);
+  text-decoration: none; font-weight: 600; }
+.button:hover { filter: brightness(1.08); }
+.tour-cta { text-align: center; margin: 0; }
+.home-shot { margin: 28px auto 8px; }
+.home-shot + p { text-align: center; margin-top: 10px; }

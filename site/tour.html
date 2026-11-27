@@ -1,0 +1,83 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Tour · Texture</title>
+  <meta name="description" content="Screenshots of the Texture desktop and phone apps: the LaTeX editor with live preview, sending photos from your phone, and transcribing handwriting.">
+  <link rel="icon" href="icon.svg" type="image/svg+xml">
+  <link rel="stylesheet" href="style.css">
+</head>
+<body>
+  <header class="site">
+    <div class="wrap">
+      <a class="brand" href="./"><img src="icon.svg" alt="" width="30" height="30">Texture</a>
+      <nav class="site" aria-label="Site">
+        <a href="./">Download</a>
+        <a href="tour.html" aria-current="page">Tour</a>
+        <a href="support.html">Support</a>
+        <a href="privacy.html">Privacy</a>
+      </nav>
+    </div>
+  </header>
+
+  <main class="tour">
+    <div class="wrap">
+      <h1>Tour</h1>
+      <p class="lede">A look at the desktop and phone apps. Click any screenshot to see it full size.</p>
+    </div>
+
+    <section class="tour-item">
+      <div class="wrap">
+        <h2>Write with a live preview</h2>
+        <p>Type LaTeX on the left and see the PDF on the right. Texture compiles when you pause, points you to the line of any error, and exports the finished PDF. It runs offline, includes its own LaTeX engine, and has autocomplete you define yourself, an optional Vim mode, and several color themes.</p>
+      </div>
+      <div class="wide"><a class="shot" href="shots/editor-1600.webp"><img src="shots/editor-960.webp" srcset="shots/editor-960.webp 960w, shots/editor-1600.webp 1600w" sizes="(max-width: 1100px) 100vw, 1068px" width="1920" height="1048" loading="lazy" decoding="async" alt="The Texture desktop app: LaTeX source on the left, the compiled PDF of a math homework on the right, and the photo inbox in a sidebar."></a></div>
+    </section>
+
+    <section class="tour-item">
+      <div class="wrap">
+        <h2>Send work from your phone</h2>
+        <p>Photograph your paper or whiteboard, rotate and crop it, and send. It shows up in the desktop's photo inbox within seconds while the app is open (or the next time you open it), and the phone marks it Delivered. Drag a photo into your document to insert it as a figure.</p>
+      </div>
+      <div class="phones">
+        <a class="shot phone" href="shots/phone-adjust-720.webp"><img src="shots/phone-adjust-360.webp" srcset="shots/phone-adjust-360.webp 360w, shots/phone-adjust-720.webp 720w" sizes="(max-width: 600px) 45vw, 270px" width="1080" height="2340" loading="lazy" decoding="async" alt="The phone app's Adjust photo screen, cropping a whiteboard of handwritten linear algebra."></a>
+        <a class="shot phone" href="shots/phone-sent-720.webp"><img src="shots/phone-sent-360.webp" srcset="shots/phone-sent-360.webp 360w, shots/phone-sent-720.webp 720w" sizes="(max-width: 600px) 45vw, 270px" width="1080" height="2340" loading="lazy" decoding="async" alt="The phone app's Sent photos list, with one photo sending and three delivered."></a>
+      </div>
+    </section>
+
+    <section class="tour-item">
+      <div class="wrap">
+        <h2>Turn handwriting into LaTeX</h2>
+        <p>Transcribe a photo and review the LaTeX next to the original before anything reaches your document. It uses your own Anthropic API key, so you pay only for what you use, and each transcription is saved so reopening it is free.</p>
+      </div>
+      <div class="wide"><a class="shot" href="shots/transcribe-1600.webp"><img src="shots/transcribe-960.webp" srcset="shots/transcribe-960.webp 960w, shots/transcribe-1600.webp 1600w" sizes="(max-width: 1100px) 100vw, 1068px" width="1920" height="1048" loading="lazy" decoding="async" alt="The Transcribe handwriting dialog: a whiteboard photo of a derivation on the left and the generated LaTeX align environment on the right."></a></div>
+    </section>
+
+    <section class="tour-item">
+      <div class="wrap">
+        <h2>Organized, and backed up</h2>
+        <p>Keep documents in folders, start them from your own templates, and see each one's first page at a glance. Everything is saved on your computer and backed up to your account, so a new computer gets it all back, and deleted documents can be restored for 30 days.</p>
+      </div>
+      <div class="wide"><a class="shot" href="shots/picker-1600.webp"><img src="shots/picker-960.webp" srcset="shots/picker-960.webp 960w, shots/picker-1600.webp 1600w" sizes="(max-width: 1100px) 100vw, 1068px" width="1920" height="1048" loading="lazy" decoding="async" alt="The document picker showing two course folders and a document thumbnail."></a></div>
+    </section>
+
+    <div class="wrap">
+      <p class="tour-cta"><a class="button" href="./#download">Download Texture</a></p>
+    </div>
+  </main>
+
+  <footer class="site">
+    <div class="wrap">
+      <nav aria-label="Footer">
+        <a href="privacy.html">Privacy policy</a>
+        <a href="terms.html">Terms of use</a>
+        <a href="support.html">Support</a>
+        <a href="delete-account.html">Delete your account</a>
+        <a href="https://github.com/iscobar456/texture">Source code</a>
+      </nav>
+      <div>Texture is made by Isaac Spencer · <a href="mailto:support@texture.isaacspencer.com">support@texture.isaacspencer.com</a></div>
+    </div>
+  </footer>
+</body>
+</html>
