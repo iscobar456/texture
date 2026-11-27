@@ -1,4 +1,5 @@
 import 'package:flutter/material.dart';
+import 'package:url_launcher/url_launcher.dart';
 
 import 'supabase.dart';
 
@@ -294,6 +295,54 @@ class FormScaffold extends StatelessWidget {
           ),
         ),
       ),
+    );
+  }
+}
+
+/// Opens a web page in the browser. Says so if no browser could take it.
+Future<void> openLink(BuildContext context, String url) async {
+  final messenger = ScaffoldMessenger.maybeOf(context);
+  final ok = await launchUrl(
+    Uri.parse(url),
+    mode: LaunchMode.externalApplication,
+  ).catchError((_) => false);
+  if (!ok) {
+    messenger?.showSnackBar(SnackBar(content: Text('Couldn\'t open $url')));
+  }
+}
+
+/// Links to the terms and privacy policy, for the bottom of the auth screens. With [agree],
+/// worded as the agreement that creating an account implies.
+class LegalLinks extends StatelessWidget {
+  const LegalLinks({super.key, this.agree = false});
+  final bool agree;
+
+  @override
+  Widget build(BuildContext context) {
+    final theme = Theme.of(context);
+    final style = theme.textTheme.bodySmall?.copyWith(
+      color: theme.colorScheme.onSurfaceVariant,
+    );
+    Widget link(String label, String url) => TextButton(
+      style: TextButton.styleFrom(
+        padding: const EdgeInsets.symmetric(horizontal: 4),
+        minimumSize: const Size(0, 36),
+        tapTargetSize: MaterialTapTargetSize.shrinkWrap,
+        textStyle: style,
+      ),
+      onPressed: () => openLink(context, url),
+      child: Text(label),
+    );
+    return Wrap(
+      alignment: WrapAlignment.center,
+      crossAxisAlignment: WrapCrossAlignment.center,
+      children: [
+        if (agree)
+          Text('By creating an account you agree to the', style: style),
+        link('Terms of Use', termsUrl),
+        Text(agree ? 'and' : '·', style: style),
+        link('Privacy Policy', privacyUrl),
+      ],
     );
   }
 }

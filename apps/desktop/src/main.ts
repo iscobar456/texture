@@ -557,6 +557,13 @@ async function closeSnippetsFile() {
 
 $("snip-back").addEventListener("click", () => void closeSnippetsFile());
 $("snip-restore").addEventListener("click", () => $<HTMLDialogElement>("snip-reset-dialog").showModal());
+// Links to the website (terms, privacy policy) open in the browser, not the app's window.
+document.addEventListener("click", (e) => {
+  const a = (e.target as Element | null)?.closest?.("a[data-url]") as HTMLAnchorElement | null;
+  if (!a) return;
+  e.preventDefault();
+  void openUrl(a.dataset.url!).catch(() => status("Could not open the browser"));
+});
 $("snip-original").addEventListener("click", () => void openUrl(SNIPPETS_ORIGINAL_URL).catch(() => status("Could not open the browser")));
 
 async function openSnippetsFile() {
@@ -1651,6 +1658,9 @@ async function initAuth() {
     submit.textContent = next === "signin" ? "Sign in" : next === "signup" ? "Create account" : "Send reset link";
     $("auth-signup").hidden = next !== "signin";
     $("auth-forgot").hidden = next !== "signin";
+    // Creating an account means agreeing to the terms; the links are there in every mode.
+    $("auth-agree").hidden = next !== "signup";
+    $("auth-and").textContent = next === "signup" ? " and the " : " · ";
     $("auth-back").hidden = next === "signin";
     msg.textContent = note ?? (next === "signin" ? "Sign in to continue." : next === "signup" ? "Create your Texture account." : "Enter your email to get a password reset link.");
   }

@@ -636,6 +636,9 @@ dialog .row button[value="ok"], dialog .row button.primary, #set-ocr-save, .dlg-
 #startup-note[hidden], #login [hidden] { display: none; }
 .auth-links { display: flex; justify-content: space-between; gap: 12px; margin: 4px 0 0; font-size: .9em; }
 .auth-links a { color: var(--accent); }
+.auth-legal { margin: 10px 0 0; font-size: .8em; color: color-mix(in srgb, var(--fg) 65%, var(--bg)); text-align: center; }
+.auth-legal a, .set-account-row a { color: var(--accent); }
+.set-account-row #set-account { flex: 1; }
 #compile-errors { display: flex; flex-direction: column; align-items: flex-start; gap: 3px; margin: 0 0 8px; font-size: .85em; }
 #compile-errors[hidden] { display: none; }
 #compile-errors .linklike { text-align: left; color: var(--danger); }

@@ -10,6 +10,7 @@ import 'delete_account.dart';
 import 'edit_photo_page.dart';
 import 'photo_store.dart';
 import 'supabase.dart';
+import 'widgets.dart';
 
 enum _State { uploading, sent, failed }
 
@@ -396,10 +397,17 @@ class _CapturePageState extends State<CapturePage> with WidgetsBindingObserver {
                   PopupMenuButton<String>(
                     icon: const Icon(Icons.account_circle_outlined),
                     tooltip: 'Account',
-                    onSelected: (v) =>
-                        v == 'delete' ? _deleteAccount() : _signOut(),
+                    onSelected: (v) => switch (v) {
+                      'delete' => _deleteAccount(),
+                      'privacy' => openLink(context, privacyUrl),
+                      _ => _signOut(),
+                    },
                     itemBuilder: (_) => [
                       PopupMenuItem(enabled: false, child: Text(email)),
+                      const PopupMenuItem(
+                        value: 'privacy',
+                        child: Text('Privacy policy'),
+                      ),
                       const PopupMenuItem(
                         value: 'out',
                         child: Text('Sign out'),

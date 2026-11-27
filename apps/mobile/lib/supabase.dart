@@ -15,6 +15,11 @@ String get authRedirect => kIsWeb
 /// on the web, in this browser's storage), so another browser can't finish the sign-in.
 const openLinkWhere = kIsWeb ? 'in this browser' : 'on this phone';
 
+/// The website's legal pages (site/ in the repo). Apple requires the privacy policy to be
+/// reachable from inside the app.
+const privacyUrl = 'https://texture.isaacspencer.com/privacy.html';
+const termsUrl = 'https://texture.isaacspencer.com/terms.html';
+
 /// For new passwords. Keep in step with the desktop's check (`initAuth` in main.ts) and the
 /// Supabase project's minimum (Authentication settings in the dashboard).
 const minPasswordLength = 8;

@@ -124,6 +124,8 @@ class _SignInPageState extends State<SignInPage> {
           ),
         ],
       ),
+      const SizedBox(height: 8),
+      const LegalLinks(),
     ],
   );
 }
@@ -216,6 +218,8 @@ class _SignUpPageState extends State<SignUpPage> {
       ErrorText(_error),
       const SizedBox(height: 24),
       LoadingButton(label: 'Create account', onPressed: _submit, busy: _busy),
+      const SizedBox(height: 12),
+      const LegalLinks(agree: true),
     ],
   );
 }
